@@ -80,16 +80,22 @@ Enheden kan opdatere sig selv over WiFi — intet kabel nødvendigt efter først
 3. Er der en nyere build på GitHub Pages, vises **Opdater nu** — klik den
 4. CYD'en henter app-firmwaren fra Pages, viser en progress-bar og genstarter selv i den nye version
 
-Sådan hænger det sammen: GitHub Actions publicerer ved hvert push en app-only
-`firmware/firmware.bin` og en `version.txt` (build-SHA) til Pages. Enheden har sin
-egen build-SHA bygget ind og sammenligner med `version.txt`. `default.csv`-partitionen
-giver to app-partitioner, så den nye firmware skrives til den inaktive og bootes over.
+Sådan hænger det sammen: GitHub Actions bygger app-only `firmware/firmware.bin` og
+publicerer en `version.txt` med den **semantiske version** til Pages. Enheden har sin
+egen version bygget ind og opdaterer **kun hvis Pages-versionen er nyere** — aldrig
+downgrade. `min_spiffs.csv` giver to app-partitioner, så den nye firmware skrives til
+den inaktive og bootes over.
 
-> **Note om sikkerhed:** OTA henter over HTTPS fra `github.io`, men med
-> `setInsecure()` (ingen certifikat-validering) for at undgå at bryde når GitHubs
-> certifikat-kæde roterer. Firmwaren er et offentligt image uden hemmeligheder, så
-> risikoen er lav, men vær opmærksom på det hvis du bygger videre. Vil du have
-> cert-validering, kan et CA-bundle lægges ind i stedet.
+**Udgiv en ny version:** hæv tallet i `VERSION`-filen (fx `1.2.0` → `1.2.1`) og push.
+CI bygger, og enheder i felten tilbyder opdateringen næste gang du trykker *Søg*.
+Pusher du uden at hæve `VERSION`, redeployes firmwaren, men enhederne ser den som
+samme version og tilbyder ingen opdatering.
+
+**HTTPS:** OTA validerer serverens certifikat mod kendte root-CA'er (ISRG Root X1,
+DigiCert Global Root G2, GlobalSign R3, USERTrust RSA — dækker `github.io`/Fastly),
+med NTP-tidssynkronisering. Rotation af GitHubs leaf/mellem-certifikat påvirker ikke
+OTA, så længe kæden går til en af disse langlivede roots. Rødderne ligger i
+`src/ota_certs.h` (genereret fra Mozillas CA-bundle).
 
 ## Licens
 

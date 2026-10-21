@@ -12,6 +12,7 @@
 */
 
 #include <Arduino.h>
+#include <time.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -22,18 +23,18 @@
 #include <PubSubClient.h>
 #include <TFT_eSPI.h>
 #include <ImprovWiFiLibrary.h>
+#include "ota_certs.h"          // root-CA'er til ægte HTTPS-validering
 
-// Build-version indsprøjtes af GitHub Actions (src/build_version.h).
-// Ved lokal build uden filen bruges "dev".
+// Semantisk version indsprøjtes af GitHub Actions fra VERSION-filen
+// (src/build_version.h). Ved lokal build uden filen bruges 0.0.0-dev.
 #if __has_include("build_version.h")
   #include "build_version.h"
 #endif
-#ifndef FW_BUILD
-  #define FW_BUILD "dev"
+#ifndef FW_VERSION_SEM
+  #define FW_VERSION_SEM "0.0.0-dev"
 #endif
 
 #define FW_NAME        "CYD Temp Gauge"
-#define FW_VERSION     "1.1.0"
 #define MQTT_CLIENTID  "cyd-temp-gauge"
 
 // GitHub Pages — kilde til OTA-opdateringer
@@ -235,7 +236,7 @@ void handleRoot() {
   h += F("<div style='max-width:420px;margin-top:28px;border-top:1px solid #2a2e3a;padding-top:18px'>"
          "<h2 style='font-size:1.1rem'>Firmware</h2>");
   h += "<p style='color:#9aa3b2;font-size:.9rem'>Nuv\xC3\xA6rende version: <code style='color:#ffcb2d'>";
-  h += FW_BUILD;
+  h += FW_VERSION_SEM;
   h += F("</code></p>"
          "<button type=button id=chk onclick=checkUpd() style='width:100%;padding:12px;border:0;border-radius:8px;background:#2a2e3a;color:#e9ecf2;font-weight:700;font-size:1rem;cursor:pointer'>S\xC3\xB8g efter opdatering</button>"
          "<div id=ures style='margin-top:12px;font-size:.92rem;color:#9aa3b2'></div>"
@@ -274,10 +275,27 @@ void handleSave() {
 }
 
 // ============================ OTA ============================
+// Sørg for korrekt ur (NTP) — TLS-certvalidering kræver det
+bool ensureTime() {
+  if (time(nullptr) > 1700000000) return true;   // allerede sat
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  uint32_t t0 = millis();
+  while (time(nullptr) < 1700000000 && millis() - t0 < 8000) delay(100);
+  return time(nullptr) > 1700000000;
+}
+
+// Parse "MAJOR.MINOR.PATCH" -> sammenligneligt tal. Pre-release-suffiks ignoreres.
+long semverNum(const String& v) {
+  int a = 0, b = 0, c = 0;
+  sscanf(v.c_str(), "%d.%d.%d", &a, &b, &c);
+  return (long)a * 1000000L + (long)b * 1000L + c;
+}
+
 String fetchLatestVersion() {
   if (WiFi.status() != WL_CONNECTED) return "";
+  ensureTime();
   WiFiClientSecure sc;
-  sc.setInsecure();                 // github.io — ingen cert-pinning (se README)
+  sc.setCACert(OTA_ROOT_CAS);       // ægte cert-validering mod kendte roots
   sc.setTimeout(12000);
   HTTPClient http;
   if (!http.begin(sc, OTA_VER_URL)) return "";
@@ -290,8 +308,9 @@ String fetchLatestVersion() {
 
 void handleCheckUpdate() {
   String latest = fetchLatestVersion();
-  String cur = FW_BUILD;
-  bool avail = latest.length() && latest != cur;
+  String cur = FW_VERSION_SEM;
+  // Kun nyere version tilbydes — aldrig downgrade
+  bool avail = latest.length() && semverNum(latest) > semverNum(cur);
   String j = "{\"current\":\"" + cur + "\",\"latest\":\"" + latest +
              "\",\"update\":" + (avail ? "true" : "false") + "}";
   server.send(200, "application/json", j);
@@ -320,8 +339,9 @@ void runOta() {
 
   Update.onProgress(drawOtaProgress);
 
+  ensureTime();
   WiFiClientSecure sc;
-  sc.setInsecure();
+  sc.setCACert(OTA_ROOT_CAS);       // ægte cert-validering
   sc.setTimeout(15000);
 
   httpUpdate.rebootOnUpdate(true);  // genstart automatisk i den nye firmware
@@ -383,7 +403,7 @@ void setup() {
 
   improvSerial.setDeviceInfo(
     ImprovTypes::ChipFamily::CF_ESP32,
-    FW_NAME, FW_VERSION, "CYD-TempGauge",
+    FW_NAME, FW_VERSION_SEM, "CYD-TempGauge",
     "http://{LOCAL_IPV4}/");          // browseren åbner konfig-siden efter WiFi
   improvSerial.onImprovConnected(onImprovConnected);
 

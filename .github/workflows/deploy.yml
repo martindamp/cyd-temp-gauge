@@ -29,7 +29,9 @@ jobs:
 
       - name: Inject build version
         run: |
-          echo "#define FW_BUILD \"${GITHUB_SHA::7}\"" > src/build_version.h
+          VER=$(tr -d ' \t\n\r' < VERSION)
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+          echo "#define FW_VERSION_SEM \"$VER\"" > src/build_version.h
           cat src/build_version.h
 
       - name: Build firmware
@@ -54,11 +56,11 @@ jobs:
         run: |
           set -e
           cp web/index.html _site/index.html
-          sed "s/__VERSION__/${GITHUB_SHA::7}/" web/manifest.json > _site/manifest.json
+          sed "s/__VERSION__/${VERSION}/" web/manifest.json > _site/manifest.json
           # App-only image for OTA (writes just the app partition, not the merged factory image)
           cp .pio/build/cyd/firmware.bin _site/firmware/firmware.bin
-          # Plain version string the device polls for OTA checks
-          printf '%s' "${GITHUB_SHA::7}" > _site/version.txt
+          # Semantic version string the device polls for OTA checks
+          printf '%s' "${VERSION}" > _site/version.txt
           echo "Assembled _site:"; find _site -type f
 
       - uses: actions/upload-pages-artifact@v3
