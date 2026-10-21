@@ -55,6 +55,22 @@ Står udkommenteret nederst i `platformio.ini`:
 
 (CYD-kloner varierer en smule i display-controller.)
 
+## Web-flasher (GitHub Pages)
+
+Ved hvert push til `main` bygger GitHub Actions firmwaren, samler et merged
+`.bin` og deployer en flasher-side til GitHub Pages. Derfra kan CYD'en flashes
+direkte fra browseren via **ESP Web Tools** (Web Serial) — ingen Arduino IDE
+eller PlatformIO nødvendig.
+
+- Virker i **Chrome / Edge på desktop** (Web Serial findes ikke i Firefox/Safari/mobil)
+- Aktivér Pages én gang: **Settings → Pages → Source: "GitHub Actions"**
+- Side: `https://martindamp.github.io/cyd-temp-gauge/`
+
+> ⚠️ **Credentials:** GitHub Pages-siden (og dermed det downloadbare `.bin`) er
+> offentlig, også fra et privat repo. Hardcode derfor ikke rigtige WiFi-/MQTT-
+> oplysninger i `src/main.cpp` hvis firmwaren bygges og udstilles her. Vil du
+> kunne sætte WiFi fra browseren efter flash i stedet, bruges Improv Wi-Fi.
+
 ## Licens
 
 MIT

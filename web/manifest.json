@@ -1,0 +1,12 @@
+{
+  "name": "CYD Temp Gauge",
+  "version": "__VERSION__",
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "firmware/cyd-temp-gauge-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
