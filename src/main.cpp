@@ -105,10 +105,9 @@ static inline uint16_t trackColor() { return tft.color565(28, 32, 44); }
 // Forældet data: tydelig dæmpet grå — adskilt fra både tom bane og live farve.
 static inline uint16_t staleColor() { return tft.color565(130, 132, 148); }
 
-uint16_t tempColor(float temp) {
-  float span = cfg.tmax - cfg.tmin;
-  float t = (span != 0) ? constrain((temp - cfg.tmin) / span, 0.0f, 1.0f) : 0.0f;
-  // Vivide ankerfarver: kold blå -> grøn -> varm rød (alle lyse, så de popper)
+// Gradient 0..1 -> blå -> grøn -> rød (vivide, lyse farver)
+uint16_t gradColor(float t) {
+  t = constrain(t, 0.0f, 1.0f);
   const uint8_t cold[3] = {0, 170, 255};
   const uint8_t midc[3] = {40, 220, 40};
   const uint8_t hot [3] = {255, 45, 20};
@@ -123,6 +122,13 @@ uint16_t tempColor(float temp) {
     b = midc[2] + (hot[2] - midc[2]) * k;
   }
   return tft.color565((uint8_t)r, (uint8_t)g, (uint8_t)b);
+}
+
+// Farve efter LODRET position på ringen: bund=blå, midterhøjde=grøn, top=rød.
+// vt = (1 - cos(vinkel)) / 2  (0 ved bunden, 1 ved toppen)
+uint16_t heightColor(float angleDeg) {
+  float vt = (1.0f - cosf(radians(angleDeg))) * 0.5f;
+  return gradColor(vt);
 }
 
 void drawStatic() {
@@ -152,13 +158,21 @@ void drawStatus() {
 void drawValue(float temp, bool stale) {
   float tC = constrain(temp, cfg.tmin, cfg.tmax);
   float span = cfg.tmax - cfg.tmin;
-  int angle = START_ANGLE + (int)round((span != 0 ? (tC - cfg.tmin) / span : 0) * (END_ANGLE - START_ANGLE));
-  uint16_t col = stale ? staleColor() : tempColor(temp);
+  float frac = (span != 0) ? (tC - cfg.tmin) / span : 0.0f;
+  float fillAngle = START_ANGLE + frac * (END_ANGLE - START_ANGLE);
 
-  if (angle > START_ANGLE)
-    tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, angle, col, TFT_BLACK, true);
-  if (angle < END_ANGLE)
-    tft.drawSmoothArc(cx, cy, rOuter, rInner, angle, END_ANGLE, trackColor(), TFT_BLACK, true);
+  // Tegn ringen i små segmenter. Tændte segmenter farves efter LODRET
+  // position (bund=blå, midt=grøn, top=rød); slukkede er mørke.
+  const int STEP = 4;
+  for (int a = START_ANGLE; a < END_ANGLE; a += STEP) {
+    int a2 = a + STEP; if (a2 > END_ANGLE) a2 = END_ANGLE;
+    float midA = (a + a2) * 0.5f;
+    uint16_t col;
+    if (midA > fillAngle)   col = trackColor();          // slukket
+    else if (stale)         col = staleColor();          // forældet data
+    else                    col = heightColor(midA);     // live, farve efter højde
+    tft.drawSmoothArc(cx, cy, rOuter, rInner, a, a2, col, TFT_BLACK, false);
+  }
 
   char buf[8];
   dtostrf(temp, 0, 1, buf);
@@ -185,11 +199,18 @@ void showMessage(const char* l1, const char* l2 = nullptr) {
 
 void enterGaugeUI() {
   drawStatic();
-  tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("--", cx, cy, 7);
-  drawStatus();
   uiGauge = true;
+  shownTemp = -1000;                 // tving fuld gentegning næste loop
+  if (haveData) {
+    bool stale = (millis() - lastMsgMs > STALE_MS);
+    drawValue(lastTemp, stale);      // gentegn straks med den kendte værdi
+    shownTemp = lastTemp;
+  } else {
+    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("--", cx, cy, 7);
+  }
+  drawStatus();
 }
 
 // ============================ MQTT ============================
