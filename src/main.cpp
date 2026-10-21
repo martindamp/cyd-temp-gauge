@@ -76,6 +76,7 @@ uint32_t lastMsgMs  = 0, lastReconnect = 0;
 bool     mqttUp     = false;
 bool     serverStarted = false;
 bool     uiGauge    = false;   // true når gauge-skærmen er aktiv
+bool     staleShown = false;   // om "gammel data"-markøren står på skærmen nu
 
 // ============================ config ============================
 void loadConfig() {
@@ -166,11 +167,18 @@ void drawValue(float temp, bool stale) {
   tft.drawString("C", cx + 12, cy + 54, 4);
   tft.drawCircle(cx - 8, cy + 48, 4, TFT_LIGHTGREY);
 
-  // Gammel-data-markør (ringen beholder sine farver — forsvinder ikke)
-  tft.fillRect(cx - 64, cy + 72, 128, 16, TFT_BLACK);
+  // Gammel-data-markør i ringens åbne midte (over tallet) — ingen bue her.
+  // Tegnes KUN når teksten vises; ryddes én gang når data bliver frisk igen,
+  // så der ikke står en konstant sort bjælke.
   if (stale) {
+    tft.fillRect(cx - 54, cy - 60, 108, 18, TFT_BLACK);
     tft.setTextColor(staleColor(), TFT_BLACK);
-    tft.drawString("gammel data", cx, cy + 80, 2);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("gammel data", cx, cy - 51, 2);
+    staleShown = true;
+  } else if (staleShown) {
+    tft.fillRect(cx - 54, cy - 60, 108, 18, TFT_BLACK);
+    staleShown = false;
   }
 }
 
