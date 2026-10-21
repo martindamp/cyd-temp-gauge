@@ -120,11 +120,13 @@
         <li>Åbn siden i <strong>Chrome</strong> eller <strong>Edge</strong> på en computer.</li>
         <li>Sæt CYD'en i USB.</li>
         <li>Klik <em>Flash CYD</em> og vælg den serielle port (CH340/CP2102).</li>
-        <li>Vent mens den skriver og genstarter — så kører temperatur-gaugen.</li>
+        <li>Efter flash beder siden om dit <strong>WiFi</strong> (via Improv) — tast SSID og password.</li>
+        <li>Når WiFi er oppe, åbner enhedens <strong>konfig-side</strong> automatisk — her sætter du <strong>MQTT-broker, topic</strong> m.m.</li>
+        <li>Gaugen kører. Enhedens IP vises nederst på skærmen, så du altid kan åbne konfig-siden igen.</li>
       </ol>
       <p class="note">
-        WiFi- og MQTT-indstillinger er bygget ind i firmwaren. Skal de kunne sættes
-        fra browseren i stedet, kræver det Improv Wi-Fi i firmwaren (se repo'et).
+        Ingen credentials bygges ind i firmwaren — WiFi sættes via Improv i browseren,
+        MQTT via enhedens egen konfig-side. Det hele gemmes på enheden og overlever genstart.
       </p>
     </div>
 
