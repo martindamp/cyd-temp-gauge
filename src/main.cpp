@@ -62,6 +62,7 @@ struct Config {
   String   mqttHost, mqttUser, mqttPass, mqttTopic;
   uint16_t mqttPort;
   float    tmin, tmax;
+  String   title, unit;
 } cfg;
 
 // ---- gauge-geometri (portrait 240x320) ----
@@ -90,6 +91,8 @@ void loadConfig() {
   cfg.mqttTopic = prefs.getString("mtopic", DEF_MQTT_TOPIC);
   cfg.tmin      = prefs.getFloat("tmin", DEF_TEMP_MIN);
   cfg.tmax      = prefs.getFloat("tmax", DEF_TEMP_MAX);
+  cfg.title     = prefs.getString("title", "TEMPERATUR");
+  cfg.unit      = prefs.getString("unit", "\xC2\xB0""C");   // UTF-8 "°C"
   prefs.end();
 }
 
@@ -111,11 +114,33 @@ static inline uint16_t bandBlue()  { return tft.color565(0, 120, 255); }
 static inline uint16_t bandGreen() { return tft.color565(30, 200, 40); }
 static inline uint16_t bandRed()   { return tft.color565(255, 45, 30); }
 
+// Tegn enheden (fx "°C", "%", "hPa") centreret. Et foranstillet gradtegn
+// tegnes som en lille ring, så den ser pæn ud uanstændigt af fonten.
+void drawUnit(const String& u) {
+  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+  String s = u;
+  bool deg = false;
+  if (s.length() >= 2 && (uint8_t)s[0] == 0xC2 && (uint8_t)s[1] == 0xB0) { deg = true; s = s.substring(2); }
+  else if (s.length() >= 1 && (uint8_t)s[0] == 0xB0)                     { deg = true; s = s.substring(1); }
+  int tw = s.length() ? tft.textWidth(s, 4) : 0;
+  if (deg) {
+    int total = 12 + tw;
+    int x0 = cx - total / 2;
+    tft.drawCircle(x0 + 4, cy + 48, 4, TFT_LIGHTGREY);
+    tft.setTextDatum(ML_DATUM);
+    tft.drawString(s, x0 + 12, cy + 54, 4);
+    tft.setTextDatum(MC_DATUM);
+  } else {
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(s, cx, cy + 54, 4);
+  }
+}
+
 void drawStatic() {
   tft.fillScreen(TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("TEMPERATUR", cx, 20, 4);
+  tft.drawString(cfg.title, cx, 20, 4);
   tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, trackColor(), TFT_BLACK, true);
   int lr = rOuter + 14;
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
@@ -147,10 +172,12 @@ void drawValue(float temp, bool stale) {
   // Hele ringen som mørk bane (ét buestykke — ingen sømme)
   tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, trackColor(), TFT_BLACK, true);
 
-  // Tændte bånd: 3 faste farver efter værdi-trediedele, hvert som ÉT buestykke
+  // Tændte bånd: 3 faste farver efter værdi-trediedele, hvert som ÉT buestykke.
+  // roundEnds=true -> rundede, FARVEDE ender (ikke mørke track-ender i enderne).
+  // Båndene tegnes i rækkefølge og mødes, så senere bånd dækker forrige kant.
   auto band = [&](float a0, float a1, uint16_t c) {
     if (a1 > a0 + 0.5f)
-      tft.drawSmoothArc(cx, cy, rOuter, rInner, (int)lroundf(a0), (int)lroundf(a1), c, TFT_BLACK, false);
+      tft.drawSmoothArc(cx, cy, rOuter, rInner, (int)lroundf(a0), (int)lroundf(a1), c, TFT_BLACK, true);
   };
   if (fillAngle > START_ANGLE) band(START_ANGLE, fminf(fillAngle, b1), bandBlue());
   if (fillAngle > b1)          band(b1,          fminf(fillAngle, b2), bandGreen());
@@ -163,9 +190,7 @@ void drawValue(float temp, bool stale) {
   tft.setTextColor(stale ? staleColor() : TFT_WHITE, TFT_BLACK);
   tft.drawString(buf, cx, cy, 7);
 
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  tft.drawString("C", cx + 12, cy + 54, 4);
-  tft.drawCircle(cx - 8, cy + 48, 4, TFT_LIGHTGREY);
+  drawUnit(cfg.unit);
 
   // Gammel-data-markør i ringens åbne midte (over tallet) — ingen bue her.
   // Tegnes KUN når teksten vises; ryddes én gang når data bliver frisk igen,
@@ -261,8 +286,10 @@ void handleRoot() {
   h += "<div><label>Topic</label><input name=mtopic value=\"" + esc(cfg.mqttTopic) + "\"></div></div>";
   h += "<label>Bruger (valgfri)</label><input name=muser value=\"" + esc(cfg.mqttUser) + "\">";
   h += "<label>Password (valgfri)</label><input name=mpass type=password value=\"" + esc(cfg.mqttPass) + "\">";
-  h += "<div class=row><div><label>Skala min &deg;C</label><input name=tmin type=number step=any value=\"" + String(cfg.tmin, 0) + "\"></div>";
-  h += "<div><label>Skala max &deg;C</label><input name=tmax type=number step=any value=\"" + String(cfg.tmax, 0) + "\"></div></div>";
+  h += "<div class=row><div><label>Skala min</label><input name=tmin type=number step=any value=\"" + String(cfg.tmin, 0) + "\"></div>";
+  h += "<div><label>Skala max</label><input name=tmax type=number step=any value=\"" + String(cfg.tmax, 0) + "\"></div></div>";
+  h += "<div class=row><div><label>Overskrift</label><input name=title maxlength=16 value=\"" + esc(cfg.title) + "\"></div>";
+  h += "<div><label>Enhed</label><input name=unit maxlength=6 value=\"" + esc(cfg.unit) + "\" placeholder='&deg;C'></div></div>";
   h += F("<button>Gem og genstart</button></form>");
 
   // --- OTA-sektion ---
@@ -306,6 +333,8 @@ void handleSave() {
   if (server.hasArg("mtopic")) prefs.putString("mtopic", server.arg("mtopic"));
   if (server.hasArg("tmin"))   prefs.putFloat("tmin",    server.arg("tmin").toFloat());
   if (server.hasArg("tmax"))   prefs.putFloat("tmax",    server.arg("tmax").toFloat());
+  if (server.hasArg("title"))  prefs.putString("title",  server.arg("title"));
+  if (server.hasArg("unit"))   prefs.putString("unit",   server.arg("unit"));
   prefs.end();
   server.send(200, "text/html",
     F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
