@@ -100,13 +100,29 @@ void saveWiFi(const char* ssid, const char* pass) {
 }
 
 // ============================ tegning ============================
+// Tom/slukket bane: meget mørk, så enhver tændt farve står skarpt frem.
+static inline uint16_t trackColor() { return tft.color565(28, 32, 44); }
+// Forældet data: tydelig dæmpet grå — adskilt fra både tom bane og live farve.
+static inline uint16_t staleColor() { return tft.color565(130, 132, 148); }
+
 uint16_t tempColor(float temp) {
   float span = cfg.tmax - cfg.tmin;
   float t = (span != 0) ? constrain((temp - cfg.tmin) / span, 0.0f, 1.0f) : 0.0f;
-  uint8_t r, g, b;
-  if (t < 0.5f) { float k = t / 0.5f;         r = 0;       g = 255 * k;       b = 255 * (1 - k); }
-  else          { float k = (t - 0.5f) / 0.5f; r = 255 * k; g = 255 * (1 - k); b = 0; }
-  return tft.color565(r, g, b);
+  // Vivide ankerfarver: kold blå -> grøn -> varm rød (alle lyse, så de popper)
+  const uint8_t cold[3] = {0, 170, 255};
+  const uint8_t midc[3] = {40, 220, 40};
+  const uint8_t hot [3] = {255, 45, 20};
+  float r, g, b;
+  if (t < 0.5f) { float k = t / 0.5f;
+    r = cold[0] + (midc[0] - cold[0]) * k;
+    g = cold[1] + (midc[1] - cold[1]) * k;
+    b = cold[2] + (midc[2] - cold[2]) * k;
+  } else { float k = (t - 0.5f) / 0.5f;
+    r = midc[0] + (hot[0] - midc[0]) * k;
+    g = midc[1] + (hot[1] - midc[1]) * k;
+    b = midc[2] + (hot[2] - midc[2]) * k;
+  }
+  return tft.color565((uint8_t)r, (uint8_t)g, (uint8_t)b);
 }
 
 void drawStatic() {
@@ -114,7 +130,7 @@ void drawStatic() {
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.drawString("TEMPERATUR", cx, 20, 4);
-  tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, TFT_DARKGREY, TFT_BLACK, true);
+  tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, trackColor(), TFT_BLACK, true);
   int lr = rOuter + 14;
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   tft.drawNumber((int)cfg.tmin, cx - lr * sin(radians(START_ANGLE)), cy + lr * cos(radians(START_ANGLE)), 2);
@@ -137,18 +153,18 @@ void drawValue(float temp, bool stale) {
   float tC = constrain(temp, cfg.tmin, cfg.tmax);
   float span = cfg.tmax - cfg.tmin;
   int angle = START_ANGLE + (int)round((span != 0 ? (tC - cfg.tmin) / span : 0) * (END_ANGLE - START_ANGLE));
-  uint16_t col = stale ? TFT_DARKGREY : tempColor(temp);
+  uint16_t col = stale ? staleColor() : tempColor(temp);
 
   if (angle > START_ANGLE)
     tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, angle, col, TFT_BLACK, true);
   if (angle < END_ANGLE)
-    tft.drawSmoothArc(cx, cy, rOuter, rInner, angle, END_ANGLE, TFT_DARKGREY, TFT_BLACK, true);
+    tft.drawSmoothArc(cx, cy, rOuter, rInner, angle, END_ANGLE, trackColor(), TFT_BLACK, true);
 
   char buf[8];
   dtostrf(temp, 0, 1, buf);
   tft.fillRect(cx - 70, cy - 32, 140, 64, TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(stale ? TFT_DARKGREY : TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(stale ? staleColor() : TFT_WHITE, TFT_BLACK);
   tft.drawString(buf, cx, cy, 7);
 
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
@@ -396,8 +412,8 @@ void setup() {
   tft.setRotation(0);
   cx = tft.width() / 2;
   cy = 150;
-  rOuter = 112;
-  rInner = 94;
+  rOuter = 114;
+  rInner = 86;    // bredere farvebånd (28 px) for bedre aflæsning
 
   loadConfig();
 
