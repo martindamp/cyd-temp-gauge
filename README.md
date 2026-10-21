@@ -71,6 +71,26 @@ eller PlatformIO nødvendig.
 > oplysninger i `src/main.cpp` hvis firmwaren bygges og udstilles her. Vil du
 > kunne sætte WiFi fra browseren efter flash i stedet, bruges Improv Wi-Fi.
 
+## OTA-opdatering (trådløst)
+
+Enheden kan opdatere sig selv over WiFi — intet kabel nødvendigt efter første flash:
+
+1. Åbn enhedens konfig-side (`http://<enhedens-ip>/` — IP'en står nederst på skærmen)
+2. Under **Firmware** → klik **Søg efter opdatering**
+3. Er der en nyere build på GitHub Pages, vises **Opdater nu** — klik den
+4. CYD'en henter app-firmwaren fra Pages, viser en progress-bar og genstarter selv i den nye version
+
+Sådan hænger det sammen: GitHub Actions publicerer ved hvert push en app-only
+`firmware/firmware.bin` og en `version.txt` (build-SHA) til Pages. Enheden har sin
+egen build-SHA bygget ind og sammenligner med `version.txt`. `default.csv`-partitionen
+giver to app-partitioner, så den nye firmware skrives til den inaktive og bootes over.
+
+> **Note om sikkerhed:** OTA henter over HTTPS fra `github.io`, men med
+> `setInsecure()` (ingen certifikat-validering) for at undgå at bryde når GitHubs
+> certifikat-kæde roterer. Firmwaren er et offentligt image uden hemmeligheder, så
+> risikoen er lav, men vær opmærksom på det hvis du bygger videre. Vil du have
+> cert-validering, kan et CA-bundle lægges ind i stedet.
+
 ## Licens
 
 MIT

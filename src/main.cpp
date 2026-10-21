@@ -13,15 +13,33 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <Update.h>
 #include <WebServer.h>
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <TFT_eSPI.h>
 #include <ImprovWiFiLibrary.h>
 
+// Build-version indsprøjtes af GitHub Actions (src/build_version.h).
+// Ved lokal build uden filen bruges "dev".
+#if __has_include("build_version.h")
+  #include "build_version.h"
+#endif
+#ifndef FW_BUILD
+  #define FW_BUILD "dev"
+#endif
+
 #define FW_NAME        "CYD Temp Gauge"
 #define FW_VERSION     "1.1.0"
 #define MQTT_CLIENTID  "cyd-temp-gauge"
+
+// GitHub Pages — kilde til OTA-opdateringer
+#define PAGES_BASE     "https://martindamp.github.io/cyd-temp-gauge/"
+#define OTA_BIN_URL    PAGES_BASE "firmware/firmware.bin"
+#define OTA_VER_URL    PAGES_BASE "version.txt"
 
 // Defaults indtil enheden konfigureres
 #define DEF_MQTT_PORT  1883
@@ -211,7 +229,30 @@ void handleRoot() {
   h += "<label>Password (valgfri)</label><input name=mpass type=password value=\"" + esc(cfg.mqttPass) + "\">";
   h += "<div class=row><div><label>Skala min &deg;C</label><input name=tmin type=number step=any value=\"" + String(cfg.tmin, 0) + "\"></div>";
   h += "<div><label>Skala max &deg;C</label><input name=tmax type=number step=any value=\"" + String(cfg.tmax, 0) + "\"></div></div>";
-  h += F("<button>Gem og genstart</button></form></body></html>");
+  h += F("<button>Gem og genstart</button></form>");
+
+  // --- OTA-sektion ---
+  h += F("<div style='max-width:420px;margin-top:28px;border-top:1px solid #2a2e3a;padding-top:18px'>"
+         "<h2 style='font-size:1.1rem'>Firmware</h2>");
+  h += "<p style='color:#9aa3b2;font-size:.9rem'>Nuv\xC3\xA6rende version: <code style='color:#ffcb2d'>";
+  h += FW_BUILD;
+  h += F("</code></p>"
+         "<button type=button id=chk onclick=checkUpd() style='width:100%;padding:12px;border:0;border-radius:8px;background:#2a2e3a;color:#e9ecf2;font-weight:700;font-size:1rem;cursor:pointer'>S\xC3\xB8g efter opdatering</button>"
+         "<div id=ures style='margin-top:12px;font-size:.92rem;color:#9aa3b2'></div>"
+         "<button type=button id=upd onclick=doUpd() style='display:none;width:100%;margin-top:12px;padding:12px;border:0;border-radius:8px;background:#35c46a;color:#05230f;font-weight:700;font-size:1rem;cursor:pointer'>Opdater nu</button>"
+         "</div>"
+         "<script>"
+         "async function checkUpd(){var b=document.getElementById('chk'),r=document.getElementById('ures'),u=document.getElementById('upd');"
+         "b.disabled=true;b.textContent='S\xC3\xB8ger\xE2\x80\xA6';r.textContent='';u.style.display='none';"
+         "try{var d=await (await fetch('/checkupdate')).json();"
+         "if(!d.latest){r.textContent='Kunne ikke kontakte GitHub.';}"
+         "else if(d.update){r.innerHTML='Ny version tilg\xC3\xA6ngelig: <code style=\"color:#ffcb2d\">'+d.latest+'</code>';u.style.display='block';}"
+         "else{r.textContent='Du har allerede nyeste version.';}"
+         "}catch(e){r.textContent='Fejl: '+e;}b.disabled=false;b.textContent='S\xC3\xB8g efter opdatering';}"
+         "async function doUpd(){var u=document.getElementById('upd'),r=document.getElementById('ures');"
+         "u.disabled=true;u.textContent='Starter\xE2\x80\xA6';r.innerHTML='Opdaterer \xE2\x80\x94 f\xC3\xB8lg med p\xC3\xA5 CYD-sk\xC3\xA6rmen. Enheden genstarter selv.';"
+         "try{await fetch('/doupdate',{method:'POST'});}catch(e){}}"
+         "</script></body></html>");
   server.send(200, "text/html", h);
 }
 
@@ -232,10 +273,90 @@ void handleSave() {
   ESP.restart();
 }
 
+// ============================ OTA ============================
+String fetchLatestVersion() {
+  if (WiFi.status() != WL_CONNECTED) return "";
+  WiFiClientSecure sc;
+  sc.setInsecure();                 // github.io — ingen cert-pinning (se README)
+  sc.setTimeout(12000);
+  HTTPClient http;
+  if (!http.begin(sc, OTA_VER_URL)) return "";
+  int code = http.GET();
+  String v;
+  if (code == 200) { v = http.getString(); v.trim(); }
+  http.end();
+  return v;
+}
+
+void handleCheckUpdate() {
+  String latest = fetchLatestVersion();
+  String cur = FW_BUILD;
+  bool avail = latest.length() && latest != cur;
+  String j = "{\"current\":\"" + cur + "\",\"latest\":\"" + latest +
+             "\",\"update\":" + (avail ? "true" : "false") + "}";
+  server.send(200, "application/json", j);
+}
+
+void drawOtaProgress(size_t done, size_t total) {
+  static int last = -1;
+  int pct = total ? (int)(done * 100 / total) : 0;
+  if (pct == last) return;
+  last = pct;
+  int w = 200, x = cx - w / 2, y = cy + 10, h = 18;
+  tft.drawRect(x, y, w, h, TFT_LIGHTGREY);
+  tft.fillRect(x + 2, y + 2, (w - 4) * pct / 100, h - 4, TFT_GREEN);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString(String(pct) + "%  ", cx, y - 18, 4);
+}
+
+void runOta() {
+  uiGauge = false;
+  mqtt.disconnect();
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Opdaterer firmware", cx, cy - 40, 4);
+
+  Update.onProgress(drawOtaProgress);
+
+  WiFiClientSecure sc;
+  sc.setInsecure();
+  sc.setTimeout(15000);
+
+  httpUpdate.rebootOnUpdate(true);  // genstart automatisk i den nye firmware
+  t_httpUpdate_return r = httpUpdate.update(sc, OTA_BIN_URL);
+
+  // Nås kun hvis det IKKE lykkedes (ved succes genstarter enheden selv)
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  if (r == HTTP_UPDATE_NO_UPDATES) {
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString("Allerede nyeste", cx, cy, 4);
+  } else {
+    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.drawString("Opdatering fejlede", cx, cy - 12, 4);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString(httpUpdate.getLastErrorString(), cx, cy + 16, 2);
+  }
+  delay(4000);
+  enterGaugeUI();
+}
+
+void handleDoUpdate() {
+  server.send(200, "text/html",
+    F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
+      "<h2>Opdaterer\xE2\x80\xA6</h2><p>F\xC3\xB8lg med p\xC3\xA5 sk\xC3\xA6rmen. Enheden genstarter n\xC3\xA5r den er f\xC3\xA6rdig.</p></body>"));
+  delay(200);
+  runOta();
+}
+
 void startServer() {
   if (serverStarted) return;
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
+  server.on("/checkupdate", HTTP_GET, handleCheckUpdate);
+  server.on("/doupdate", HTTP_POST, handleDoUpdate);
   server.begin();
   serverStarted = true;
 }

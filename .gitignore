@@ -3,6 +3,9 @@
 .pioenvs/
 .piolibdeps/
 
+# Genereres af CI (build-version indsprøjtes ved build)
+src/build_version.h
+
 # IDE / editor
 .vscode/
 .idea/
