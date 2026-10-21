@@ -22,6 +22,7 @@
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <TFT_eSPI.h>
+#include <U8g2_for_TFT_eSPI.h>  // Unicode-fonte (ÆØÅ, gradtegn)
 #include <ImprovWiFiLibrary.h>
 #include "ota_certs.h"          // root-CA'er til ægte HTTPS-validering
 
@@ -50,6 +51,7 @@
 #define STALE_MS       60000UL
 
 TFT_eSPI     tft = TFT_eSPI();
+U8g2_for_TFT_eSPI u8f;          // Unicode-tekst (overskrift + enhed)
 WiFiClient   net;
 PubSubClient mqtt(net);
 WebServer    server(80);
@@ -114,33 +116,24 @@ static inline uint16_t bandBlue()  { return tft.color565(0, 120, 255); }
 static inline uint16_t bandGreen() { return tft.color565(30, 200, 40); }
 static inline uint16_t bandRed()   { return tft.color565(255, 45, 30); }
 
-// Tegn enheden (fx "°C", "%", "hPa") centreret. Et foranstillet gradtegn
-// tegnes som en lille ring, så den ser pæn ud uanstændigt af fonten.
+// Enheden (fx "°C", "%", "hPa") centreret via U8g2 — håndterer ° og ÆØÅ.
 void drawUnit(const String& u) {
-  tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  String s = u;
-  bool deg = false;
-  if (s.length() >= 2 && (uint8_t)s[0] == 0xC2 && (uint8_t)s[1] == 0xB0) { deg = true; s = s.substring(2); }
-  else if (s.length() >= 1 && (uint8_t)s[0] == 0xB0)                     { deg = true; s = s.substring(1); }
-  int tw = s.length() ? tft.textWidth(s, 4) : 0;
-  if (deg) {
-    int total = 12 + tw;
-    int x0 = cx - total / 2;
-    tft.drawCircle(x0 + 4, cy + 48, 4, TFT_LIGHTGREY);
-    tft.setTextDatum(ML_DATUM);
-    tft.drawString(s, x0 + 12, cy + 54, 4);
-    tft.setTextDatum(MC_DATUM);
-  } else {
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString(s, cx, cy + 54, 4);
-  }
+  tft.fillRect(cx - 54, cy + 40, 108, 26, TFT_BLACK);   // ryd (i ringens hul)
+  u8f.setFont(u8g2_font_helvB14_tf);
+  u8f.setFontMode(1);
+  u8f.setForegroundColor(TFT_LIGHTGREY);
+  int w = u8f.getUTF8Width(u.c_str());
+  u8f.drawUTF8(cx - w / 2, cy + 62, u.c_str());
 }
 
 void drawStatic() {
   tft.fillScreen(TFT_BLACK);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString(cfg.title, cx, 20, 4);
+  // Overskrift via U8g2 (ÆØÅ virker)
+  u8f.setFont(u8g2_font_helvB18_tf);
+  u8f.setFontMode(1);
+  u8f.setForegroundColor(TFT_WHITE);
+  int tw = u8f.getUTF8Width(cfg.title.c_str());
+  u8f.drawUTF8(cx - tw / 2, 30, cfg.title.c_str());
   tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, trackColor(), TFT_BLACK, true);
   int lr = rOuter + 14;
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
@@ -185,7 +178,8 @@ void drawValue(float temp, bool stale) {
 
   char buf[8];
   dtostrf(temp, 0, 1, buf);
-  tft.fillRect(cx - 70, cy - 32, 140, 64, TFT_BLACK);
+  // Bredere rydning (i hullet), så cifre fra et større tal ikke hænger ved
+  tft.fillRect(cx - 80, cy - 30, 160, 60, TFT_BLACK);
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(stale ? staleColor() : TFT_WHITE, TFT_BLACK);
   tft.drawString(buf, cx, cy, 7);
@@ -514,6 +508,7 @@ void setup() {
 
   tft.init();
   tft.setRotation(0);
+  u8f.begin(tft);                // Unicode-fonte klar
   cx = tft.width() / 2;
   cy = 150;
   rOuter = 114;
