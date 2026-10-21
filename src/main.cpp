@@ -258,6 +258,13 @@ void handleRoot() {
          "<div id=ures style='margin-top:12px;font-size:.92rem;color:#9aa3b2'></div>"
          "<button type=button id=upd onclick=doUpd() style='display:none;width:100%;margin-top:12px;padding:12px;border:0;border-radius:8px;background:#35c46a;color:#05230f;font-weight:700;font-size:1rem;cursor:pointer'>Opdater nu</button>"
          "</div>"
+         // --- Diagnostik ---
+         "<div style='max-width:420px;margin-top:28px;border-top:1px solid #2a2e3a;padding-top:18px'>"
+         "<h2 style='font-size:1.1rem'>Diagnostik</h2>"
+         "<div class=row>"
+         "<div><button type=button onclick=\"fetch('/colortest',{method:'POST'})\" style='width:100%;padding:12px;border:0;border-radius:8px;background:#2a2e3a;color:#e9ecf2;font-weight:700;font-size:1rem;cursor:pointer'>Vis farvetest</button></div>"
+         "<div><button type=button onclick=\"fetch('/gauge',{method:'POST'})\" style='width:100%;padding:12px;border:0;border-radius:8px;background:#2a2e3a;color:#e9ecf2;font-weight:700;font-size:1rem;cursor:pointer'>Tilbage til gauge</button></div>"
+         "</div></div>"
          "<script>"
          "async function checkUpd(){var b=document.getElementById('chk'),r=document.getElementById('ures'),u=document.getElementById('upd');"
          "b.disabled=true;b.textContent='S\xC3\xB8ger\xE2\x80\xA6';r.textContent='';u.style.display='none';"
@@ -387,12 +394,63 @@ void handleDoUpdate() {
   runOta();
 }
 
+// ============================ farvetest ============================
+// Viser 7 rene farver med navn + RGB, så fejl i farverækkefølge/inversion
+// kan aflæses direkte: "feltet mærket ROED viser <farve>".
+void drawColorTest() {
+  uiGauge = false;
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextDatum(TL_DATUM);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("FARVETEST", 8, 4, 2);
+
+  struct Row { const char* n; uint8_t r, g, b; };
+  static const Row rows[7] = {
+    {"ROED",    255,   0,   0},
+    {"GROEN",     0, 255,   0},
+    {"BLAA",      0,   0, 255},
+    {"GUL",     255, 255,   0},
+    {"CYAN",      0, 255, 255},
+    {"MAGENTA", 255,   0, 255},
+    {"HVID",    255, 255, 255},
+  };
+  const int y0 = 24, bh = 42;
+  for (int i = 0; i < 7; i++) {
+    int y = y0 + i * bh;
+    // Venstre: sort felt med navn + RGB (altid læsbart, hvidt på sort)
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString(rows[i].n, 8, y + 4, 4);
+    char rgb[16];
+    snprintf(rgb, sizeof(rgb), "%u,%u,%u", rows[i].r, rows[i].g, rows[i].b);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString(rgb, 8, y + 26, 2);
+    // Højre: farveprøve
+    tft.fillRect(128, y + 2, 108, bh - 6, tft.color565(rows[i].r, rows[i].g, rows[i].b));
+  }
+}
+
+void handleColorTest() {
+  server.send(200, "text/html",
+    F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
+      "<h2>Farvetest vist</h2><p>Se CYD-sk\xC3\xA6rmen. Tryk \xE2\x80\x9DTilbage til gauge\xE2\x80\x9D n\xC3\xA5r du er f\xC3\xA6rdig.</p></body>"));
+  drawColorTest();
+}
+
+void handleGauge() {
+  server.send(200, "text/html",
+    F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
+      "<h2>Tilbage til gauge</h2></body>"));
+  enterGaugeUI();
+}
+
 void startServer() {
   if (serverStarted) return;
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/checkupdate", HTTP_GET, handleCheckUpdate);
   server.on("/doupdate", HTTP_POST, handleDoUpdate);
+  server.on("/colortest", HTTP_POST, handleColorTest);
+  server.on("/gauge", HTTP_POST, handleGauge);
   server.begin();
   serverStarted = true;
 }
