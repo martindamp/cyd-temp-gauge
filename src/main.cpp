@@ -105,31 +105,10 @@ static inline uint16_t trackColor() { return tft.color565(28, 32, 44); }
 // Forældet data: tydelig dæmpet grå — adskilt fra både tom bane og live farve.
 static inline uint16_t staleColor() { return tft.color565(130, 132, 148); }
 
-// Gradient 0..1 -> blå -> grøn -> rød (vivide, lyse farver)
-uint16_t gradColor(float t) {
-  t = constrain(t, 0.0f, 1.0f);
-  const uint8_t cold[3] = {0, 170, 255};
-  const uint8_t midc[3] = {40, 220, 40};
-  const uint8_t hot [3] = {255, 45, 20};
-  float r, g, b;
-  if (t < 0.5f) { float k = t / 0.5f;
-    r = cold[0] + (midc[0] - cold[0]) * k;
-    g = cold[1] + (midc[1] - cold[1]) * k;
-    b = cold[2] + (midc[2] - cold[2]) * k;
-  } else { float k = (t - 0.5f) / 0.5f;
-    r = midc[0] + (hot[0] - midc[0]) * k;
-    g = midc[1] + (hot[1] - midc[1]) * k;
-    b = midc[2] + (hot[2] - midc[2]) * k;
-  }
-  return tft.color565((uint8_t)r, (uint8_t)g, (uint8_t)b);
-}
-
-// Farve efter LODRET position på ringen: bund=blå, midterhøjde=grøn, top=rød.
-// vt = (1 - cos(vinkel)) / 2  (0 ved bunden, 1 ved toppen)
-uint16_t heightColor(float angleDeg) {
-  float vt = (1.0f - cosf(radians(angleDeg))) * 0.5f;
-  return gradColor(vt);
-}
+// Tre faste farvebånd efter værdi-intervallet (nederste/midterste/øverste trediedel)
+static inline uint16_t bandBlue()  { return tft.color565(0, 120, 255); }
+static inline uint16_t bandGreen() { return tft.color565(30, 200, 40); }
+static inline uint16_t bandRed()   { return tft.color565(255, 45, 30); }
 
 void drawStatic() {
   tft.fillScreen(TFT_BLACK);
@@ -159,20 +138,22 @@ void drawValue(float temp, bool stale) {
   float tC = constrain(temp, cfg.tmin, cfg.tmax);
   float span = cfg.tmax - cfg.tmin;
   float frac = (span != 0) ? (tC - cfg.tmin) / span : 0.0f;
-  float fillAngle = START_ANGLE + frac * (END_ANGLE - START_ANGLE);
+  float sweep = END_ANGLE - START_ANGLE;
+  float fillAngle = START_ANGLE + frac * sweep;
+  float b1 = START_ANGLE + sweep / 3.0f;        // grænse blå|grøn
+  float b2 = START_ANGLE + 2.0f * sweep / 3.0f; // grænse grøn|rød
 
-  // Tegn ringen i små segmenter. Tændte segmenter farves efter LODRET
-  // position (bund=blå, midt=grøn, top=rød); slukkede er mørke.
-  const int STEP = 4;
-  for (int a = START_ANGLE; a < END_ANGLE; a += STEP) {
-    int a2 = a + STEP; if (a2 > END_ANGLE) a2 = END_ANGLE;
-    float midA = (a + a2) * 0.5f;
-    uint16_t col;
-    if (midA > fillAngle)   col = trackColor();          // slukket
-    else if (stale)         col = staleColor();          // forældet data
-    else                    col = heightColor(midA);     // live, farve efter højde
-    tft.drawSmoothArc(cx, cy, rOuter, rInner, a, a2, col, TFT_BLACK, false);
-  }
+  // Hele ringen som mørk bane (ét buestykke — ingen sømme)
+  tft.drawSmoothArc(cx, cy, rOuter, rInner, START_ANGLE, END_ANGLE, trackColor(), TFT_BLACK, true);
+
+  // Tændte bånd: 3 faste farver efter værdi-trediedele, hvert som ÉT buestykke
+  auto band = [&](float a0, float a1, uint16_t c) {
+    if (a1 > a0 + 0.5f)
+      tft.drawSmoothArc(cx, cy, rOuter, rInner, (int)lroundf(a0), (int)lroundf(a1), c, TFT_BLACK, false);
+  };
+  if (fillAngle > START_ANGLE) band(START_ANGLE, fminf(fillAngle, b1), bandBlue());
+  if (fillAngle > b1)          band(b1,          fminf(fillAngle, b2), bandGreen());
+  if (fillAngle > b2)          band(b2,          fillAngle,            bandRed());
 
   char buf[8];
   dtostrf(temp, 0, 1, buf);
@@ -184,6 +165,13 @@ void drawValue(float temp, bool stale) {
   tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
   tft.drawString("C", cx + 12, cy + 54, 4);
   tft.drawCircle(cx - 8, cy + 48, 4, TFT_LIGHTGREY);
+
+  // Gammel-data-markør (ringen beholder sine farver — forsvinder ikke)
+  tft.fillRect(cx - 64, cy + 72, 128, 16, TFT_BLACK);
+  if (stale) {
+    tft.setTextColor(staleColor(), TFT_BLACK);
+    tft.drawString("gammel data", cx, cy + 80, 2);
+  }
 }
 
 void showMessage(const char* l1, const char* l2 = nullptr) {
