@@ -16,9 +16,12 @@ are configured at runtime on the device's own web page.
 | `counter` | A large number from a topic, with a title and optional unit | `title`, `topic`, `unit` |
 | `text` | Static text, dynamic text from a topic, or nothing | `title`, and `text` (static) **or** `topic` (dynamic) |
 
-Up to 6 components are laid out in an adaptive grid (1 → full screen, 2/3 → rows,
-4 → 2×2, 5/6 → 2×3). A thin status bar at the bottom shows the device IP and a
-connection dot (green = WiFi + MQTT OK, red = not connected).
+Components are laid out on a fixed **3-row × 2-col** grid (rows 0–2, cols 0–1, so
+up to 6 components). Each component may set `row` and `col`; omit them to
+auto-place it in the next free cell. Set `expand: true` to make a component fill
+the rest of its row when the other column is free (e.g. a single component in
+row 2 with `expand` spans the full width). A thin status bar at the bottom shows
+the device IP and a connection dot (green = WiFi + MQTT OK, red = not connected).
 
 ## Dashboard configuration (`dashboard.json`)
 
@@ -29,20 +32,22 @@ layout is fixed in each build.
 ```json
 {
   "components": [
-    { "type": "gauge",   "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
-    { "type": "gauge",   "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
-    { "type": "counter", "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
-    { "type": "counter", "title": "Power",       "topic": "home/power",        "unit": "W" },
-    { "type": "text",    "title": "Status",      "topic": "home/status" },
-    { "type": "text",    "title": "",            "text": "My Home" }
+    { "type": "gauge",   "row": 0, "col": 0, "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
+    { "type": "gauge",   "row": 0, "col": 1, "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
+    { "type": "counter", "row": 1, "col": 0, "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
+    { "type": "counter", "row": 1, "col": 1, "title": "Power",       "topic": "home/power",        "unit": "W" },
+    { "type": "text",    "row": 2, "col": 0, "expand": true, "title": "Status", "topic": "home/status" }
   ]
 }
 ```
 
+Common placement keys for every type: `row` (0–2), `col` (0–1), `expand` (bool).
+Omit `row`/`col` to auto-place.
+
 - `"°C"` is `°C`. Accented characters and the degree sign render correctly.
 - gauge / counter topics expect a plain number (e.g. `21.5`); text topics take any text.
-- The config page lists the configured components (read-only) so you can see which
-  topics to publish.
+- The config page lists the configured components (read-only) with their cell, so
+  you can see the layout and which topics to publish.
 
 ## Features
 

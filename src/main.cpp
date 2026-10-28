@@ -86,6 +86,12 @@ struct Component {
   String   staticText;  // for text components
   String   unit;
   float    vmin, vmax;  // for gauge
+  // placement (build-time):
+  int      row, col;    // grid position; -1 = auto-place in the next free cell
+  bool     expand;      // fill the rest of the row when the other column is free
+  // computed layout:
+  bool     placed;
+  int      rx, ry, rw, rh;
   // runtime state:
   bool     haveData;
   String   value;       // latest payload (trimmed)
@@ -139,6 +145,11 @@ void loadDashboard() {
     k.unit       = (const char*)(c["unit"]  | "");
     k.vmin       = c["min"] | 0.0f;
     k.vmax       = c["max"] | 100.0f;
+    k.row        = c["row"] | -1;
+    k.col        = c["col"] | -1;
+    k.expand     = c["expand"] | false;
+    k.placed     = false;
+    k.rx = k.ry = k.rw = k.rh = 0;
     k.haveData   = false;
     k.value      = "";
     k.num        = 0;
@@ -149,26 +160,47 @@ void loadDashboard() {
   }
 }
 
+// Fixed 3-row x 2-col grid. Components keep their assigned (row,col); those
+// without a valid assignment are auto-placed into the next free cell. A
+// component with expand=true fills the whole row when the other column is free.
+#define GRID_COLS 2
+#define GRID_ROWS 3
+void layoutDashboard() {
+  int grid[GRID_ROWS][GRID_COLS];
+  for (int r = 0; r < GRID_ROWS; r++)
+    for (int c = 0; c < GRID_COLS; c++) grid[r][c] = -1;
+
+  // Pass 1: honour explicit, in-range, non-clashing placements.
+  for (int i = 0; i < nComps; i++) {
+    comps[i].placed = false;
+    int r = comps[i].row, c = comps[i].col;
+    if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS && grid[r][c] == -1) {
+      grid[r][c] = i; comps[i].placed = true;
+    }
+  }
+  // Pass 2: auto-place the rest into the first free cell.
+  for (int i = 0; i < nComps; i++) {
+    if (comps[i].placed) continue;
+    for (int r = 0; r < GRID_ROWS && !comps[i].placed; r++)
+      for (int c = 0; c < GRID_COLS && !comps[i].placed; c++)
+        if (grid[r][c] == -1) { grid[r][c] = i; comps[i].row = r; comps[i].col = c; comps[i].placed = true; }
+  }
+  // Compute pixel rects.
+  int cw = 240 / GRID_COLS, ch = GRID_H / GRID_ROWS;
+  for (int i = 0; i < nComps; i++) {
+    if (!comps[i].placed) continue;
+    int r = comps[i].row, c = comps[i].col;
+    comps[i].rx = c * cw; comps[i].ry = r * ch; comps[i].rw = cw; comps[i].rh = ch;
+    if (comps[i].expand && grid[r][1 - c] == -1) { comps[i].rx = 0; comps[i].rw = GRID_COLS * cw; }
+  }
+}
+
 // ============================ colours ============================
 static inline uint16_t trackColor() { return tft.color565(28, 32, 44); }
 static inline uint16_t staleColor() { return tft.color565(130, 132, 148); }
 static inline uint16_t bandBlue()   { return tft.color565(0, 120, 255); }
 static inline uint16_t bandGreen()  { return tft.color565(30, 200, 40); }
 static inline uint16_t bandRed()    { return tft.color565(255, 45, 30); }
-
-// ============================ layout ============================
-// Cell rectangle for component i of n, within a 240 x GRID_H area.
-void cellRect(int i, int n, int& x, int& y, int& w, int& h) {
-  int cols, rows;
-  if      (n <= 1) { cols = 1; rows = 1; }
-  else if (n == 2) { cols = 1; rows = 2; }
-  else if (n == 3) { cols = 1; rows = 3; }
-  else if (n == 4) { cols = 2; rows = 2; }
-  else             { cols = 2; rows = 3; }   // 5 or 6
-  int cw = 240 / cols, ch = GRID_H / rows;
-  int col = i % cols, row = i / cols;
-  x = col * cw; y = row * ch; w = cw; h = ch;
-}
 
 // ============================ drawing helpers ============================
 // Draw a numeric string centred, picking the largest TFT font that fits.
@@ -235,7 +267,8 @@ void drawWrappedText(int x, int y, int w, int h, const String& text, uint16_t co
 // ============================ component rendering ============================
 void drawComponent(int idx, bool clearCell) {
   Component& c = comps[idx];
-  int x, y, w, h; cellRect(idx, nComps, x, y, w, h);
+  if (!c.placed) return;
+  int x = c.rx, y = c.ry, w = c.rw, h = c.rh;
   if (clearCell) tft.fillRect(x, y, w, h, TFT_BLACK);
   tft.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 6, trackColor());
 
@@ -407,12 +440,15 @@ void handleRoot() {
   // Components (read-only; configured at build time in dashboard.json)
   h += F("<div class=card><h2>Components</h2>"
          "<p class=hint>Configured at build time in <code>dashboard.json</code>.</p>"
-         "<table>");
+         "<table><tr><td class=m>Cell</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
-    h += "<tr><td>" + esc(ttl) + "</td><td class=m><code>" + tn + "</code></td><td class=m>" + esc(tpc) + "</td></tr>";
+    String cell = comps[i].placed
+                    ? "r" + String(comps[i].row) + " c" + String(comps[i].col) + (comps[i].rw > 120 ? " \xE2\x86\x94" : "")
+                    : String("-");
+    h += "<tr><td class=m>" + cell + "</td><td class=m><code>" + tn + "</code></td><td>" + esc(ttl) + "</td><td class=m>" + esc(tpc) + "</td></tr>";
   }
   h += F("</table></div>");
 
@@ -620,6 +656,7 @@ void setup() {
 
   loadConfig();
   loadDashboard();
+  layoutDashboard();
 
   improvSerial.setDeviceInfo(
     ImprovTypes::ChipFamily::CF_ESP32,

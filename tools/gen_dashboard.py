@@ -27,6 +27,12 @@ def generate(project_dir):
         if t not in VALID_TYPES:
             raise ValueError("dashboard.json: component %d has invalid type %r "
                              "(expected one of %s)" % (i, t, sorted(VALID_TYPES)))
+        r = c.get("row")
+        if r is not None and r not in (0, 1, 2):
+            raise ValueError("dashboard.json: component %d has row %r (must be 0, 1 or 2)" % (i, r))
+        col = c.get("col")
+        if col is not None and col not in (0, 1):
+            raise ValueError("dashboard.json: component %d has col %r (must be 0 or 1)" % (i, col))
 
     # Keep only the components array, minified, to save flash.
     mini = json.dumps({"components": comps}, separators=(",", ":"), ensure_ascii=False)

@@ -1,11 +1,10 @@
 {
-  "comment": "Dashboard layout for the CYD. Up to 6 components, applied at build time. Edit this file and push (or rebuild) to change the screen. WiFi and the MQTT broker are still configured at runtime on the device's web page.",
+  "comment": "Dashboard layout for the CYD, applied at build time. Fixed 3x2 grid: row 0-2, col 0-1 (up to 6 components). Each component may set row and col; omit them to auto-place in the next free cell. Set expand:true to fill the rest of the row when the other column is free. WiFi and the MQTT broker are still configured at runtime on the device's web page.",
   "components": [
-    { "type": "gauge",   "title": "Living room", "topic": "home/living/temp",   "min": 0,   "max": 40, "unit": "°C" },
-    { "type": "gauge",   "title": "Outside",     "topic": "home/outside/temp",  "min": -20, "max": 40, "unit": "°C" },
-    { "type": "counter", "title": "Humidity",    "topic": "home/living/hum",    "unit": "%" },
-    { "type": "counter", "title": "Power",       "topic": "home/power",         "unit": "W" },
-    { "type": "text",    "title": "Status",      "topic": "home/status" },
-    { "type": "text",    "title": "",            "text": "My Home" }
+    { "type": "gauge",   "row": 0, "col": 0, "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
+    { "type": "gauge",   "row": 0, "col": 1, "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
+    { "type": "counter", "row": 1, "col": 0, "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
+    { "type": "counter", "row": 1, "col": 1, "title": "Power",       "topic": "home/power",        "unit": "W" },
+    { "type": "text",    "row": 2, "col": 0, "expand": true, "title": "Status", "topic": "home/status" }
   ]
 }
