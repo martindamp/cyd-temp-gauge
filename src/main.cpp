@@ -601,7 +601,14 @@ void handleRoot() {
          ".res{margin-top:12px;font-size:.9rem;color:#8b94a7}"
          "</style></head><body><main>"
          "<h1>CYD Dashboard</h1><p class=sub>Device configuration</p>"
-         "<form method=POST action=/save><div class=card><h2>MQTT broker</h2>");
+         "<form method=POST action=/save>"
+         "<div class=card><h2>WiFi</h2>"
+         "<p class=hint>Leave the password blank to keep the current one. If the new "
+         "network is wrong the device goes offline \xE2\x80\x94 reconnect over USB "
+         "(flasher page) to fix it.</p>");
+  h += "<label>Network (SSID)</label><input name=ssid value=\"" + esc(cfg.ssid) + "\">";
+  h += F("<label>Password</label><input name=wpass type=password placeholder='(unchanged)'></div>"
+         "<div class=card><h2>MQTT broker</h2>");
   h += "<label>Broker (host/IP)</label><input name=mhost value=\"" + esc(cfg.mqttHost) + "\" placeholder='192.168.1.10'>";
   h += "<div class=row><div><label>Port</label><input name=mport type=number value=\"" + String(cfg.mqttPort) + "\"></div>";
   h += "<div><label>User (optional)</label><input name=muser value=\"" + esc(cfg.mqttUser) + "\"></div></div>";
@@ -613,7 +620,8 @@ void handleRoot() {
          "<p class=hint>Configured at build time in <code>dashboard.json</code>.</p>"
          "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
-    const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter" : "text";
+    const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
+                     : comps[i].type == UPDATE ? "update" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
     String pos = comps[i].placed
@@ -654,6 +662,9 @@ void handleRoot() {
 
 void handleSave() {
   prefs.begin("cfg", false);
+  if (server.hasArg("ssid")) prefs.putString("ssid", server.arg("ssid"));
+  // Only overwrite the WiFi password when a new one was typed.
+  if (server.hasArg("wpass") && server.arg("wpass").length()) prefs.putString("pass", server.arg("wpass"));
   if (server.hasArg("mhost")) prefs.putString("mhost", server.arg("mhost"));
   if (server.hasArg("mport")) prefs.putUShort("mport", (uint16_t)server.arg("mport").toInt());
   if (server.hasArg("muser")) prefs.putString("muser", server.arg("muser"));
