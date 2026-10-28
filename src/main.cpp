@@ -30,8 +30,10 @@
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include <SPI.h>
 #include <TFT_eSPI.h>
 #include <U8g2_for_TFT_eSPI.h>  // Unicode fonts (accented chars, degree sign)
+#include <XPT2046_Touchscreen.h>   // CYD resistive touch (page navigation)
 #include <ImprovWiFiLibrary.h>
 #include "ota_certs.h"             // root CAs for real HTTPS validation
 #include "dashboard_generated.h"   // DASHBOARD_JSON (generated from dashboard.json)
@@ -54,8 +56,22 @@
 
 #define DEF_MQTT_PORT  1883
 #define STALE_MS       60000UL
-#define MAX_COMPONENTS 6
-#define GRID_H         304         // screen height used by the grid; bottom bar is the rest
+#define MAX_PAGES      6
+#define MAX_PER_PAGE   6
+#define MAX_COMPONENTS (MAX_PAGES * MAX_PER_PAGE)
+#define GRID_H         286         // screen height used by the grid; the rest is the nav bar
+
+// CYD resistive touch (XPT2046) on a separate SPI bus
+#define XPT2046_IRQ   36
+#define XPT2046_MOSI  32
+#define XPT2046_MISO  39
+#define XPT2046_CLK   25
+#define XPT2046_CS    33
+// Raw-to-pixel calibration (typical CYD values; tweak if taps feel off)
+#define TOUCH_MINX    200
+#define TOUCH_MAXX    3700
+#define TOUCH_MINY    240
+#define TOUCH_MAXY    3800
 
 // U8g2 fonts (Latin-1: accents + degree sign)
 #define FONT_TITLE  u8g2_font_helvB10_tf
@@ -64,6 +80,8 @@
 
 TFT_eSPI     tft = TFT_eSPI();
 U8g2_for_TFT_eSPI u8f;
+SPIClass     touchSPI(VSPI);
+XPT2046_Touchscreen touchscreen(XPT2046_CS, XPT2046_IRQ);
 WiFiClient   net;
 PubSubClient mqtt(net);
 WebServer    server(80);
@@ -87,6 +105,7 @@ struct Component {
   String   unit;
   float    vmin, vmax;  // for gauge
   // placement (build-time):
+  int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
   bool     expand;      // fill the rest of the row when the other column is free
   // computed layout:
@@ -102,12 +121,15 @@ struct Component {
 };
 Component comps[MAX_COMPONENTS];
 int       nComps = 0;
+int       nPages = 1;
+int       currentPage = 0;
 
 // ---- UI state ----
 bool     uiDash     = false;   // true when the dashboard is on screen
 bool     serverStarted = false;
 bool     mqttUp     = false;
 uint32_t lastReconnect = 0;
+uint32_t lastTouchMs = 0;
 int      cx, cy;               // screen centre (used by full-screen messages)
 
 // ============================ config ============================
@@ -129,69 +151,97 @@ void saveWiFi(const char* ssid, const char* pass) {
   prefs.end();
 }
 
-void loadDashboard() {
-  nComps = 0;
-  JsonDocument doc;
-  if (deserializeJson(doc, DASHBOARD_JSON)) return;   // leave empty on parse error
-  for (JsonVariant v : doc["components"].as<JsonArray>()) {
-    if (nComps >= MAX_COMPONENTS) break;
-    JsonObject c = v.as<JsonObject>();
-    Component& k = comps[nComps];
-    String t = (const char*)(c["type"] | "text");
-    k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER : TEXT;
-    k.title      = (const char*)(c["title"] | "");
-    k.topic      = (const char*)(c["topic"] | "");
-    k.staticText = (const char*)(c["text"]  | "");
-    k.unit       = (const char*)(c["unit"]  | "");
-    k.vmin       = c["min"] | 0.0f;
-    k.vmax       = c["max"] | 100.0f;
-    k.row        = c["row"] | -1;
-    k.col        = c["col"] | -1;
-    k.expand     = c["expand"] | false;
-    k.placed     = false;
-    k.rx = k.ry = k.rw = k.rh = 0;
-    k.haveData   = false;
-    k.value      = "";
-    k.num        = 0;
-    k.lastMs     = 0;
-    k.dirty      = false;
-    k.wasStale   = false;
-    nComps++;
+static void parseComponent(JsonObject c, int page) {
+  Component& k = comps[nComps];
+  String t = (const char*)(c["type"] | "text");
+  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER : TEXT;
+  k.title      = (const char*)(c["title"] | "");
+  k.topic      = (const char*)(c["topic"] | "");
+  k.staticText = (const char*)(c["text"]  | "");
+  k.unit       = (const char*)(c["unit"]  | "");
+  k.vmin       = c["min"] | 0.0f;
+  k.vmax       = c["max"] | 100.0f;
+  k.page       = page;
+  k.row        = c["row"] | -1;
+  k.col        = c["col"] | -1;
+  k.expand     = c["expand"] | false;
+  k.placed     = false;
+  k.rx = k.ry = k.rw = k.rh = 0;
+  k.haveData   = false;
+  k.value      = "";
+  k.num        = 0;
+  k.lastMs     = 0;
+  k.dirty      = false;
+  k.wasStale   = false;
+  nComps++;
+}
+
+static void parsePage(JsonArray arr, int page) {
+  if (arr.isNull()) return;
+  int inPage = 0;
+  for (JsonVariant v : arr) {
+    if (nComps >= MAX_COMPONENTS || inPage >= MAX_PER_PAGE) break;
+    parseComponent(v.as<JsonObject>(), page);
+    inPage++;
   }
 }
 
-// Fixed 3-row x 2-col grid. Components keep their assigned (row,col); those
-// without a valid assignment are auto-placed into the next free cell. A
+void loadDashboard() {
+  nComps = 0; nPages = 1; currentPage = 0;
+  JsonDocument doc;
+  if (deserializeJson(doc, DASHBOARD_JSON)) return;   // leave empty on parse error
+
+  JsonArray pages = doc["pages"].as<JsonArray>();
+  if (!pages.isNull()) {
+    int p = 0;
+    for (JsonVariant pv : pages) {
+      if (p >= MAX_PAGES) break;
+      parsePage(pv["components"].as<JsonArray>(), p);
+      p++;
+    }
+    nPages = (p > 0) ? p : 1;
+  } else {
+    // Backward-compatible single-page form: {"components":[...]}
+    parsePage(doc["components"].as<JsonArray>(), 0);
+    nPages = 1;
+  }
+}
+
+// Fixed 3-row x 2-col grid per page. Components keep their assigned (row,col);
+// those without a valid assignment are auto-placed into the next free cell. A
 // component with expand=true fills the whole row when the other column is free.
 #define GRID_COLS 2
 #define GRID_ROWS 3
 void layoutDashboard() {
-  int grid[GRID_ROWS][GRID_COLS];
-  for (int r = 0; r < GRID_ROWS; r++)
-    for (int c = 0; c < GRID_COLS; c++) grid[r][c] = -1;
-
-  // Pass 1: honour explicit, in-range, non-clashing placements.
-  for (int i = 0; i < nComps; i++) {
-    comps[i].placed = false;
-    int r = comps[i].row, c = comps[i].col;
-    if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS && grid[r][c] == -1) {
-      grid[r][c] = i; comps[i].placed = true;
-    }
-  }
-  // Pass 2: auto-place the rest into the first free cell.
-  for (int i = 0; i < nComps; i++) {
-    if (comps[i].placed) continue;
-    for (int r = 0; r < GRID_ROWS && !comps[i].placed; r++)
-      for (int c = 0; c < GRID_COLS && !comps[i].placed; c++)
-        if (grid[r][c] == -1) { grid[r][c] = i; comps[i].row = r; comps[i].col = c; comps[i].placed = true; }
-  }
-  // Compute pixel rects.
   int cw = 240 / GRID_COLS, ch = GRID_H / GRID_ROWS;
-  for (int i = 0; i < nComps; i++) {
-    if (!comps[i].placed) continue;
-    int r = comps[i].row, c = comps[i].col;
-    comps[i].rx = c * cw; comps[i].ry = r * ch; comps[i].rw = cw; comps[i].rh = ch;
-    if (comps[i].expand && grid[r][1 - c] == -1) { comps[i].rx = 0; comps[i].rw = GRID_COLS * cw; }
+  for (int pg = 0; pg < nPages; pg++) {
+    int grid[GRID_ROWS][GRID_COLS];
+    for (int r = 0; r < GRID_ROWS; r++)
+      for (int c = 0; c < GRID_COLS; c++) grid[r][c] = -1;
+
+    // Pass 1: explicit placements on this page.
+    for (int i = 0; i < nComps; i++) {
+      if (comps[i].page != pg) continue;
+      comps[i].placed = false;
+      int r = comps[i].row, c = comps[i].col;
+      if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS && grid[r][c] == -1) {
+        grid[r][c] = i; comps[i].placed = true;
+      }
+    }
+    // Pass 2: auto-place the rest on this page.
+    for (int i = 0; i < nComps; i++) {
+      if (comps[i].page != pg || comps[i].placed) continue;
+      for (int r = 0; r < GRID_ROWS && !comps[i].placed; r++)
+        for (int c = 0; c < GRID_COLS && !comps[i].placed; c++)
+          if (grid[r][c] == -1) { grid[r][c] = i; comps[i].row = r; comps[i].col = c; comps[i].placed = true; }
+    }
+    // Compute pixel rects for this page.
+    for (int i = 0; i < nComps; i++) {
+      if (comps[i].page != pg || !comps[i].placed) continue;
+      int r = comps[i].row, c = comps[i].col;
+      comps[i].rx = c * cw; comps[i].ry = r * ch; comps[i].rw = cw; comps[i].rh = ch;
+      if (comps[i].expand && grid[r][1 - c] == -1) { comps[i].rx = 0; comps[i].rw = GRID_COLS * cw; }
+    }
   }
 }
 
@@ -322,24 +372,64 @@ void drawComponent(int idx, bool clearCell) {
   }
 }
 
-// ============================ status bar + full dashboard ============================
-void drawStatusBar() {
-  int y = GRID_H;
-  tft.fillRect(0, y, 240, 320 - y, TFT_BLACK);
-  uint16_t c = (WiFi.status() == WL_CONNECTED && mqttUp) ? TFT_GREEN : TFT_RED;
-  tft.fillCircle(232, y + 8, 4, c);
-  if (WiFi.status() == WL_CONNECTED) {
+// ============================ nav bar + full dashboard ============================
+// Bottom bar: prev/next page arrows (when >1 page), page indicator, status dot, IP.
+void drawNavBar() {
+  int y = GRID_H, bh = 320 - GRID_H, my = y + bh / 2;
+  tft.fillRect(0, y, 240, bh, TFT_BLACK);
+  tft.drawFastHLine(0, y, 240, trackColor());
+
+  if (nPages > 1) {
+    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, TFT_LIGHTGREY);   // prev
+    tft.fillTriangle(224, my, 210, my - 9, 210, my + 9, TFT_LIGHTGREY); // next
+  }
+
+  uint16_t dc = (WiFi.status() == WL_CONNECTED && mqttUp) ? TFT_GREEN : TFT_RED;
+  if (nPages > 1) {
+    tft.fillCircle(92, y + 11, 4, dc);
     tft.setTextDatum(ML_DATUM);
-    tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    tft.drawString(WiFi.localIP().toString(), 6, y + 8, 2);
+    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.drawString(String(currentPage + 1) + "/" + String(nPages), 104, y + 11, 2);
+    if (WiFi.status() == WL_CONNECTED) {
+      tft.setTextDatum(MC_DATUM);
+      tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      tft.drawString(WiFi.localIP().toString(), 120, y + 25, 1);
+    }
+  } else {
+    tft.fillCircle(232, y + bh / 2, 4, dc);
+    if (WiFi.status() == WL_CONNECTED) {
+      tft.setTextDatum(ML_DATUM);
+      tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      tft.drawString(WiFi.localIP().toString(), 6, y + bh / 2, 2);
+    }
   }
 }
 
 void drawDashboard() {
   tft.fillScreen(TFT_BLACK);
-  for (int i = 0; i < nComps; i++) { comps[i].dirty = false; drawComponent(i, false); }
-  drawStatusBar();
+  for (int i = 0; i < nComps; i++) {
+    comps[i].dirty = false;
+    if (comps[i].page == currentPage) drawComponent(i, false);
+  }
+  drawNavBar();
   uiDash = true;
+}
+
+// Poll the touchscreen; tap the left/right of the nav bar to change page.
+void handleTouch() {
+  if (!uiDash || nPages <= 1) return;
+  if (!(touchscreen.tirqTouched() && touchscreen.touched())) return;
+  uint32_t now = millis();
+  if (now - lastTouchMs < 350) return;
+  TS_Point p = touchscreen.getPoint();
+  if (p.z < 200) return;                        // ignore very light/no touch
+  int tx = map(p.x, TOUCH_MINX, TOUCH_MAXX, 0, 239);
+  int ty = map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, 319);
+  tx = constrain(tx, 0, 239); ty = constrain(ty, 0, 319);
+  if (ty < GRID_H - 10) return;                 // only taps in the nav bar
+  lastTouchMs = now;
+  if (tx < 90)       { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
+  else if (tx > 150) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
 }
 
 void showMessage(const char* l1, const char* l2 = nullptr) {
@@ -440,15 +530,16 @@ void handleRoot() {
   // Components (read-only; configured at build time in dashboard.json)
   h += F("<div class=card><h2>Components</h2>"
          "<p class=hint>Configured at build time in <code>dashboard.json</code>.</p>"
-         "<table><tr><td class=m>Cell</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
+         "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
-    String cell = comps[i].placed
-                    ? "r" + String(comps[i].row) + " c" + String(comps[i].col) + (comps[i].rw > 120 ? " \xE2\x86\x94" : "")
+    String pos = comps[i].placed
+                    ? "p" + String(comps[i].page + 1) + " r" + String(comps[i].row) + " c" + String(comps[i].col) +
+                      (comps[i].rw > 120 ? " \xE2\x86\x94" : "")
                     : String("-");
-    h += "<tr><td class=m>" + cell + "</td><td class=m><code>" + tn + "</code></td><td>" + esc(ttl) + "</td><td class=m>" + esc(tpc) + "</td></tr>";
+    h += "<tr><td class=m>" + pos + "</td><td class=m><code>" + tn + "</code></td><td>" + esc(ttl) + "</td><td class=m>" + esc(tpc) + "</td></tr>";
   }
   h += F("</table></div>");
 
@@ -654,6 +745,11 @@ void setup() {
   cx = tft.width() / 2;
   cy = tft.height() / 2;
 
+  // Touch on its own SPI bus (separate from the display)
+  touchSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
+  touchscreen.begin(touchSPI);
+  touchscreen.setRotation(0);
+
   loadConfig();
   loadDashboard();
   layoutDashboard();
@@ -694,6 +790,8 @@ void loop() {
 
   if (!uiDash) { delay(10); return; }
 
+  handleTouch();
+
   static bool lastConn = false;
   if (WiFi.status() == WL_CONNECTED && cfg.mqttHost.length()) {
     if (!mqtt.connected()) {
@@ -707,10 +805,13 @@ void loop() {
     }
   }
   bool conn = (WiFi.status() == WL_CONNECTED && mqttUp);
-  if (conn != lastConn) { lastConn = conn; drawStatusBar(); }
+  if (conn != lastConn) { lastConn = conn; drawNavBar(); }
 
-  // Redraw a component when it gets new data or when its stale state changes.
+  // Redraw a component (on the current page) when it gets new data or its
+  // stale state changes. Off-page components keep their state and are drawn
+  // fresh when you navigate to them.
   for (int i = 0; i < nComps; i++) {
+    if (comps[i].page != currentPage) continue;
     bool nowStale = comps[i].haveData && (millis() - comps[i].lastMs > STALE_MS);
     if (comps[i].dirty || nowStale != comps[i].wasStale) {
       comps[i].dirty = false;

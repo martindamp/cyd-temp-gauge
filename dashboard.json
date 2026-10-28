@@ -1,10 +1,22 @@
 {
-  "comment": "Dashboard layout for the CYD, applied at build time. Fixed 3x2 grid: row 0-2, col 0-1 (up to 6 components). Each component may set row and col; omit them to auto-place in the next free cell. Set expand:true to fill the rest of the row when the other column is free. WiFi and the MQTT broker are still configured at runtime on the device's web page.",
-  "components": [
-    { "type": "gauge",   "row": 0, "col": 0, "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
-    { "type": "gauge",   "row": 0, "col": 1, "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
-    { "type": "counter", "row": 1, "col": 0, "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
-    { "type": "counter", "row": 1, "col": 1, "title": "Power",       "topic": "home/power",        "unit": "W" },
-    { "type": "text",    "row": 2, "col": 0, "expand": true, "title": "Status", "topic": "home/status" }
+  "comment": "Dashboard layout for the CYD, applied at build time. One or more pages, each a fixed 3x2 grid: row 0-2, col 0-1 (up to 6 components per page, up to 6 pages). Tap the on-screen arrows to switch pages. Each component may set row/col (omit to auto-place) and expand (fill the rest of the row when the other column is free). WiFi and the MQTT broker are still configured at runtime on the device's web page.",
+  "pages": [
+    {
+      "components": [
+        { "type": "gauge",   "row": 0, "col": 0, "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
+        { "type": "gauge",   "row": 0, "col": 1, "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
+        { "type": "counter", "row": 1, "col": 0, "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
+        { "type": "counter", "row": 1, "col": 1, "title": "Power",       "topic": "home/power",        "unit": "W" },
+        { "type": "text",    "row": 2, "col": 0, "expand": true, "title": "Status", "topic": "home/status" }
+      ]
+    },
+    {
+      "components": [
+        { "type": "gauge",   "row": 0, "col": 0, "expand": true, "title": "Water tank", "topic": "home/water/level", "min": 0, "max": 100, "unit": "%" },
+        { "type": "counter", "row": 1, "col": 0, "title": "Solar", "topic": "home/solar/power", "unit": "W" },
+        { "type": "counter", "row": 1, "col": 1, "title": "Grid",  "topic": "home/grid/power",  "unit": "W" },
+        { "type": "text",    "row": 2, "col": 0, "expand": true, "text": "Page 2" }
+      ]
+    }
   ]
 }
