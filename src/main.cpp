@@ -302,6 +302,7 @@ void drawWrappedText(int x, int y, int w, int h, const String& text, uint16_t co
   u8f.setFont(FONT_TEXT);
   u8f.setFontMode(1);
   u8f.setForegroundColor(color);
+  u8f.setBackgroundColor(TFT_BLACK);
   const int lineH = 15;
   int maxLines = h / lineH; if (maxLines < 1) maxLines = 1;
   if (maxLines > 8) maxLines = 8;
@@ -343,6 +344,7 @@ void drawComponent(int idx, bool clearCell) {
   if (c.title.length()) {
     u8f.setFont(FONT_TITLE);
     u8f.setFontMode(1);
+    u8f.setBackgroundColor(TFT_BLACK);
     u8f.setForegroundColor(TFT_LIGHTGREY);
     int tw = u8f.getUTF8Width(c.title.c_str());
     u8f.drawUTF8(ix + (iw - tw) / 2, iy + 11, c.title.c_str());
@@ -366,6 +368,7 @@ void drawComponent(int idx, bool clearCell) {
     if (showUnit) {
       u8f.setFont(FONT_SMALL);
       u8f.setForegroundColor(TFT_LIGHTGREY);
+      u8f.setBackgroundColor(TFT_BLACK);
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(gcx - uw / 2, gcy + rI - 3, c.unit.c_str());
     }
@@ -376,6 +379,7 @@ void drawComponent(int idx, bool clearCell) {
     if (c.unit.length()) {
       u8f.setFont(FONT_SMALL);
       u8f.setForegroundColor(TFT_LIGHTGREY);
+      u8f.setBackgroundColor(TFT_BLACK);
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(ix + (iw - uw) / 2, by + bh - 2, c.unit.c_str());
     }
@@ -402,6 +406,7 @@ void drawComponent(int idx, bool clearCell) {
     tft.drawRoundRect(bx, bby, bw, bhh, 8, border);
     tft.drawRoundRect(bx + 1, bby + 1, bw - 2, bhh - 2, 7, border);   // 2px border = bolder
     u8f.setFontMode(1);
+    u8f.setBackgroundColor(bg);          // glyph background = button fill (no black boxes)
     int cxb = bx + bw / 2, cyb = bby + bhh / 2;
     if (line2.length()) {
       u8f.setFont(u8g2_font_helvB12_tf);
