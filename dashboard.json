@@ -1,0 +1,11 @@
+{
+  "comment": "Dashboard layout for the CYD. Up to 6 components, applied at build time. Edit this file and push (or rebuild) to change the screen. WiFi and the MQTT broker are still configured at runtime on the device's web page.",
+  "components": [
+    { "type": "gauge",   "title": "Living room", "topic": "home/living/temp",   "min": 0,   "max": 40, "unit": "°C" },
+    { "type": "gauge",   "title": "Outside",     "topic": "home/outside/temp",  "min": -20, "max": 40, "unit": "°C" },
+    { "type": "counter", "title": "Humidity",    "topic": "home/living/hum",    "unit": "%" },
+    { "type": "counter", "title": "Power",       "topic": "home/power",         "unit": "W" },
+    { "type": "text",    "title": "Status",      "topic": "home/status" },
+    { "type": "text",    "title": "",            "text": "My Home" }
+  ]
+}

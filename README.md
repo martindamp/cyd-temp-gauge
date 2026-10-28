@@ -1,22 +1,56 @@
-# CYD Temperature Gauge (MQTT)
+# CYD Dashboard (MQTT)
 
 A PlatformIO project for the **Cheap Yellow Display** (ESP32-2432S028R, 2.8" ILI9341)
-that subscribes to an MQTT topic and shows the temperature as a coloured ring gauge
-(blue → green → red bands) with the value in the centre.
+that shows up to **6 components** on one screen, each driven by an MQTT topic.
+The layout is configured at build time in `dashboard.json`; WiFi and the MQTT broker
+are configured at runtime on the device's own web page.
 
 ![board](https://img.shields.io/badge/board-ESP32--2432S028R-yellow)
 ![framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-blue)
 
+## Component types
+
+| Type | Shows | Config keys |
+|------|-------|-------------|
+| `gauge` | Coloured ring gauge (blue/green/red bands by value third) with the value in the centre | `title`, `topic`, `min`, `max`, `unit` |
+| `counter` | A large number from a topic, with a title and optional unit | `title`, `topic`, `unit` |
+| `text` | Static text, dynamic text from a topic, or nothing | `title`, and `text` (static) **or** `topic` (dynamic) |
+
+Up to 6 components are laid out in an adaptive grid (1 → full screen, 2/3 → rows,
+4 → 2×2, 5/6 → 2×3). A thin status bar at the bottom shows the device IP and a
+connection dot (green = WiFi + MQTT OK, red = not connected).
+
+## Dashboard configuration (`dashboard.json`)
+
+Edit `dashboard.json` and rebuild / push. A pre-build script
+(`tools/gen_dashboard.py`) validates it and embeds it into the firmware, so the
+layout is fixed in each build.
+
+```json
+{
+  "components": [
+    { "type": "gauge",   "title": "Living room", "topic": "home/living/temp",  "min": 0,   "max": 40, "unit": "°C" },
+    { "type": "gauge",   "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
+    { "type": "counter", "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
+    { "type": "counter", "title": "Power",       "topic": "home/power",        "unit": "W" },
+    { "type": "text",    "title": "Status",      "topic": "home/status" },
+    { "type": "text",    "title": "",            "text": "My Home" }
+  ]
+}
+```
+
+- `"°C"` is `°C`. Accented characters and the degree sign render correctly.
+- gauge / counter topics expect a plain number (e.g. `21.5`); text topics take any text.
+- The config page lists the configured components (read-only) so you can see which
+  topics to publish.
+
 ## Features
 
-- Ring gauge with three fixed colour bands across a configurable scale
-- Large 7-segment value in the centre
-- Status dot: green = WiFi + MQTT OK, red = no connection
-- Shows a "stale data" marker if no new message has arrived for 60 s
-- Automatic MQTT reconnect
-- No hardcoded credentials: WiFi via Improv Wi-Fi, everything else via the
-  device's own config page; all settings are stored in NVS and survive a restart
-- Configurable title and unit (supports accented characters and the degree sign)
+- Up to 6 gauge / counter / text components on one screen
+- No hardcoded credentials: WiFi via Improv Wi-Fi, MQTT broker via the web page;
+  both stored in NVS and surviving a restart
+- "stale" dimming if a component gets no new message for 60 s
+- Automatic MQTT reconnect, multi-topic subscribe
 - Over-the-air (OTA) updates from GitHub Pages over validated HTTPS
 - All TFT_eSPI configuration lives in `platformio.ini` — the library is not touched
 
@@ -34,19 +68,14 @@ No extra wiring — the CYD is an all-in-one board.
 ## Getting started
 
 1. Open the folder in VS Code with the **PlatformIO** extension.
-2. **Build** → **Upload** with the CYD on USB. Serial monitor at 115200 baud.
-3. The first time, the device asks for WiFi over Improv (from the web flasher
-   below) or connects with stored credentials. Then open the device's config
-   page (its IP is shown at the bottom of the screen) to set the MQTT broker,
-   topic, scale, title and unit.
+2. Edit `dashboard.json` for your components.
+3. **Build** → **Upload** with the CYD on USB. Serial monitor at 115200 baud.
+4. The first time, provide WiFi over Improv (from the web flasher below) or via
+   stored credentials. Then open the device's config page (its IP is shown at the
+   bottom of the screen) to set the MQTT broker.
 
-`lib_deps` pulls in TFT_eSPI, PubSubClient, Improv Wi-Fi and U8g2 on the first build.
-
-## MQTT payload
-
-The code expects a plain number, e.g. `21.5`.
-If the temperature arrives as JSON (e.g. `{"temperature": 21.5}`), there is a
-ready-made ArduinoJson variant in the comment at the bottom of `src/main.cpp`.
+`lib_deps` pulls in TFT_eSPI, PubSubClient, Improv Wi-Fi, U8g2 and ArduinoJson on
+the first build.
 
 ## Troubleshooting
 
@@ -57,53 +86,37 @@ Commented out at the bottom of `platformio.ini`:
 - Completely black screen → swap `ILI9341_2_DRIVER` for `ILI9341_DRIVER`
 
 There is also a built-in **colour test** on the config page (Diagnostics →
-Show colour test) that shows seven named colours for diagnosing such faults.
-
-(CYD clones vary slightly in display controller and colour handling.)
+Show colour test). CYD clones vary slightly in display controller and colour handling.
 
 ## Web flasher (GitHub Pages)
 
 On every push to `main`, GitHub Actions builds the firmware, merges a factory
 `.bin` and deploys a flasher page to GitHub Pages. From there the CYD can be
-flashed straight from the browser via **ESP Web Tools** (Web Serial) — no
-Arduino IDE or PlatformIO needed.
+flashed straight from the browser via **ESP Web Tools** (Web Serial).
 
 - Works in **Chrome / Edge on desktop** (Web Serial is not in Firefox/Safari/mobile)
 - Enable Pages once: **Settings → Pages → Source: "GitHub Actions"**
 - Page: `https://martindamp.github.io/cyd-temp-gauge/`
 
-The firmware ships with no credentials, so the public `.bin` on Pages contains
-no secrets. WiFi is provisioned via Improv in the browser after flashing, and
-MQTT via the device's own config page.
+The firmware ships with no credentials, so the public `.bin` on Pages contains no
+secrets.
 
 ## OTA update (wireless)
 
-The device can update itself over WiFi — no cable needed after the first flash:
+1. Open the device's config page (`http://<device-ip>/` — the IP is on the screen)
+2. Under **Firmware** → **Check for update**
+3. If a newer build is on Pages, **Update now** appears — click it
+4. The device downloads the app firmware, shows a progress bar and restarts into it
 
-1. Open the device's config page (`http://<device-ip>/` — the IP is shown at the
-   bottom of the screen)
-2. Under **Firmware** → click **Check for update**
-3. If a newer build is on GitHub Pages, **Update now** appears — click it
-4. The CYD downloads the app firmware from Pages, shows a progress bar and
-   restarts itself into the new version
+GitHub Actions publishes an app-only `firmware/firmware.bin` and a `version.txt`
+(semantic version) to Pages. The device updates **only if the Pages version is
+newer** — never a downgrade. `min_spiffs.csv` provides two app partitions for OTA.
 
-How it fits together: GitHub Actions builds an app-only `firmware/firmware.bin`
-and publishes a `version.txt` with the **semantic version** to Pages. The device
-has its own version compiled in and updates **only if the Pages version is newer**
-— never a downgrade. `min_spiffs.csv` provides two app partitions, so the new
-firmware is written to the inactive one and booted into.
-
-**Release a new version:** bump the number in the `VERSION` file (e.g. `1.2.0` →
-`1.2.1`) and push. CI builds, and devices in the field offer the update the next
-time you press *Check*. Pushing without bumping `VERSION` redeploys the firmware,
-but devices see it as the same version and offer no update.
+**Release a new version:** bump `VERSION` (e.g. `2.0.0` → `2.0.1`) and push.
 
 **HTTPS:** OTA validates the server certificate against known root CAs (ISRG Root
 X1, DigiCert Global Root G2, GlobalSign R3, USERTrust RSA — covering
-`github.io`/Fastly), with NTP time sync. Rotation of GitHub's leaf/intermediate
-certificate does not affect OTA as long as the chain goes to one of these
-long-lived roots. The roots live in `src/ota_certs.h` (generated from Mozilla's
-CA bundle).
+`github.io`/Fastly), with NTP time sync. The roots live in `src/ota_certs.h`.
 
 ## License
 
