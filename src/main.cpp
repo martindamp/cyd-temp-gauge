@@ -369,52 +369,65 @@ static String esc(const String& s) {
 
 void handleRoot() {
   String h;
-  h.reserve(3200);
+  h.reserve(3600);
   h += F("<!doctype html><html lang=en><head><meta charset=utf-8>"
          "<meta name=viewport content='width=device-width,initial-scale=1'>"
          "<title>CYD Dashboard</title><style>"
-         "body{font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;margin:0;padding:24px;display:flex;justify-content:center}"
-         "main{width:100%;max-width:420px}form{width:100%}h1{font-size:1.3rem}h2{font-size:1.1rem}"
-         "label{display:block;margin:14px 0 4px;font-size:.9rem;color:#9aa3b2}"
-         "input{width:100%;padding:10px;border-radius:8px;border:1px solid #2a2e3a;background:#0d0f15;color:#e9ecf2;font-size:1rem}"
-         ".row{display:flex;gap:10px}.row>div{flex:1}"
-         "button{margin-top:20px;width:100%;padding:12px;border:0;border-radius:8px;background:#ffcb2d;color:#1a1500;font-weight:700;font-size:1rem;cursor:pointer}"
-         ".sec{margin-top:28px;border-top:1px solid #2a2e3a;padding-top:18px}"
-         "table{width:100%;border-collapse:collapse;font-size:.85rem}td{padding:4px 6px;border-bottom:1px solid #1c2029;color:#9aa3b2}"
-         "code{color:#ffcb2d}"
-         "</style></head><body><main><form method=POST action=/save>"
-         "<h1>CYD Dashboard</h1>"
-         "<h2>MQTT broker</h2>");
+         ":root{color-scheme:dark}"
+         "*{box-sizing:border-box}"
+         "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0d0f15;color:#e9ecf2;margin:0;padding:24px 16px;display:flex;justify-content:center;line-height:1.5}"
+         "main{width:100%;max-width:440px}"
+         "h1{font-size:1.4rem;margin:0 0 4px}"
+         ".sub{color:#8b94a7;font-size:.85rem;margin:0 0 18px}"
+         ".card{background:#171a22;border:1px solid #242938;border-radius:14px;padding:18px;margin-bottom:16px}"
+         ".card h2{font-size:1rem;margin:0 0 4px}"
+         ".hint{margin:0 0 6px;color:#8b94a7;font-size:.82rem}"
+         "label{display:block;margin:12px 0 4px;font-size:.82rem;color:#8b94a7}"
+         "input{width:100%;padding:10px 12px;border-radius:9px;border:1px solid #2a3042;background:#0d0f15;color:#e9ecf2;font-size:1rem}"
+         "input:focus{outline:none;border-color:#ffcb2d}"
+         ".row{display:flex;gap:12px}.row>div{flex:1}"
+         "button{width:100%;padding:12px;border:0;border-radius:9px;font-weight:700;font-size:.95rem;cursor:pointer}"
+         ".primary{background:#ffcb2d;color:#1a1500;margin-top:16px}"
+         ".sec{background:#242938;color:#e9ecf2}"
+         ".ok{background:#35c46a;color:#05230f;margin-top:12px}"
+         ".diag{display:flex;gap:12px}"
+         "table{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:6px}"
+         "td{padding:6px 4px;border-bottom:1px solid #20242f;color:#b7bfce;vertical-align:top}"
+         "td.m{color:#8b94a7}code{color:#ffcb2d;font-size:.9em}"
+         ".res{margin-top:12px;font-size:.9rem;color:#8b94a7}"
+         "</style></head><body><main>"
+         "<h1>CYD Dashboard</h1><p class=sub>Device configuration</p>"
+         "<form method=POST action=/save><div class=card><h2>MQTT broker</h2>");
   h += "<label>Broker (host/IP)</label><input name=mhost value=\"" + esc(cfg.mqttHost) + "\" placeholder='192.168.1.10'>";
-  h += "<div class=row><div><label>Port</label><input name=mport type=number value=\"" + String(cfg.mqttPort) + "\"></div></div>";
-  h += "<label>User (optional)</label><input name=muser value=\"" + esc(cfg.mqttUser) + "\">";
+  h += "<div class=row><div><label>Port</label><input name=mport type=number value=\"" + String(cfg.mqttPort) + "\"></div>";
+  h += "<div><label>User (optional)</label><input name=muser value=\"" + esc(cfg.mqttUser) + "\"></div></div>";
   h += "<label>Password (optional)</label><input name=mpass type=password value=\"" + esc(cfg.mqttPass) + "\">";
-  h += F("<button>Save and restart</button></form>");
+  h += F("<button class=primary>Save and restart</button></div></form>");
 
   // Components (read-only; configured at build time in dashboard.json)
-  h += F("<div class=sec><h2>Components</h2>"
-         "<p style='color:#9aa3b2;font-size:.85rem'>Configured at build time in <code>dashboard.json</code>.</p>"
+  h += F("<div class=card><h2>Components</h2>"
+         "<p class=hint>Configured at build time in <code>dashboard.json</code>.</p>"
          "<table>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
-    h += "<tr><td>" + esc(ttl) + "</td><td><code>" + tn + "</code></td><td>" + esc(tpc) + "</td></tr>";
+    h += "<tr><td>" + esc(ttl) + "</td><td class=m><code>" + tn + "</code></td><td class=m>" + esc(tpc) + "</td></tr>";
   }
   h += F("</table></div>");
 
   // OTA
-  h += F("<div class=sec><h2>Firmware</h2>");
-  h += "<p style='color:#9aa3b2;font-size:.9rem'>Current version: <code>";
+  h += F("<div class=card><h2>Firmware</h2>");
+  h += "<p class=hint>Current version: <code>";
   h += FW_VERSION_SEM;
   h += F("</code></p>"
-         "<button type=button id=chk onclick=checkUpd() style='background:#2a2e3a;color:#e9ecf2'>Check for update</button>"
-         "<div id=ures style='margin-top:12px;font-size:.92rem;color:#9aa3b2'></div>"
-         "<button type=button id=upd onclick=doUpd() style='display:none;background:#35c46a;color:#05230f'>Update now</button>"
+         "<button type=button class=sec id=chk onclick=checkUpd()>Check for update</button>"
+         "<div class=res id=ures></div>"
+         "<button type=button class=ok id=upd onclick=doUpd() style='display:none'>Update now</button>"
          "</div>"
-         "<div class=sec><h2>Diagnostics</h2><div class=row>"
-         "<div><button type=button onclick=\"fetch('/colortest',{method:'POST'})\" style='background:#2a2e3a;color:#e9ecf2'>Show colour test</button></div>"
-         "<div><button type=button onclick=\"fetch('/dashboard',{method:'POST'})\" style='background:#2a2e3a;color:#e9ecf2'>Back to dashboard</button></div>"
+         "<div class=card><h2>Diagnostics</h2><div class=diag>"
+         "<button type=button class=sec onclick=\"fetch('/colortest',{method:'POST'})\">Colour test</button>"
+         "<button type=button class=sec onclick=\"fetch('/dashboard',{method:'POST'})\">Dashboard</button>"
          "</div></div>"
          "<script>"
          "async function checkUpd(){var b=document.getElementById('chk'),r=document.getElementById('ures'),u=document.getElementById('upd');"
