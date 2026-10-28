@@ -380,39 +380,41 @@ void drawComponent(int idx, bool clearCell) {
       u8f.drawUTF8(ix + (iw - uw) / 2, by + bh - 2, c.unit.c_str());
     }
   } else if (c.type == UPDATE) {
-    // A tappable button: check for an update, then install it.
-    uint16_t bg, border, fg;
+    // A tappable button: check for an update, then install it. Strong colours.
+    uint16_t bg, border, fg, fg2;
     String line1, line2;
     switch (c.updState) {
       case UPD_CHECKING:
-        bg = trackColor(); border = trackColor(); fg = TFT_LIGHTGREY;
+        bg = tft.color565(52, 66, 110); border = tft.color565(120, 150, 230); fg = TFT_WHITE; fg2 = TFT_LIGHTGREY;
         line1 = "Checking..."; break;
       case UPD_UPTODATE:
-        bg = tft.color565(24, 44, 30); border = tft.color565(40, 90, 55); fg = tft.color565(130, 220, 150);
+        bg = tft.color565(16, 92, 46); border = tft.color565(60, 220, 110); fg = TFT_WHITE; fg2 = tft.color565(170, 255, 200);
         line1 = "Up to date"; line2 = "v" FW_VERSION_SEM; break;
       case UPD_AVAILABLE:
-        bg = tft.color565(30, 56, 24); border = bandGreen(); fg = bandGreen();
+        bg = tft.color565(28, 150, 42); border = tft.color565(90, 255, 90); fg = TFT_WHITE; fg2 = tft.color565(210, 255, 210);
         line1 = "Update now"; line2 = "\xE2\x86\x92 v" + c.latestVer; break;
       default:  // UPD_IDLE
-        bg = trackColor(); border = tft.color565(48, 54, 70); fg = TFT_LIGHTGREY;
+        bg = tft.color565(44, 86, 180); border = tft.color565(120, 170, 255); fg = TFT_WHITE; fg2 = tft.color565(200, 216, 245);
         line1 = "Check for update"; line2 = "v" FW_VERSION_SEM; break;
     }
     int bx = ix, bby = by + 2, bw = iw, bhh = bh - 4;
     tft.fillRoundRect(bx, bby, bw, bhh, 8, bg);
     tft.drawRoundRect(bx, bby, bw, bhh, 8, border);
+    tft.drawRoundRect(bx + 1, bby + 1, bw - 2, bhh - 2, 7, border);   // 2px border = bolder
     u8f.setFontMode(1);
-    u8f.setForegroundColor(fg);
     int cxb = bx + bw / 2, cyb = bby + bhh / 2;
     if (line2.length()) {
       u8f.setFont(u8g2_font_helvB12_tf);
+      u8f.setForegroundColor(fg);
       int w1 = u8f.getUTF8Width(line1.c_str());
       u8f.drawUTF8(cxb - w1 / 2, cyb - 1, line1.c_str());
       u8f.setFont(FONT_SMALL);
-      u8f.setForegroundColor(TFT_LIGHTGREY);
+      u8f.setForegroundColor(fg2);
       int w2 = u8f.getUTF8Width(line2.c_str());
       u8f.drawUTF8(cxb - w2 / 2, cyb + 15, line2.c_str());
     } else {
       u8f.setFont(u8g2_font_helvB12_tf);
+      u8f.setForegroundColor(fg);
       int w1 = u8f.getUTF8Width(line1.c_str());
       u8f.drawUTF8(cxb - w1 / 2, cyb + 5, line1.c_str());
     }
