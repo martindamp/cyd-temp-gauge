@@ -96,7 +96,8 @@ struct Config {
 } cfg;
 
 // ---- dashboard components (build-time layout) ----
-enum CompType { GAUGE, COUNTER, TEXT };
+enum CompType { GAUGE, COUNTER, TEXT, UPDATE };
+enum UpdState { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE };
 struct Component {
   CompType type;
   String   title;
@@ -104,6 +105,9 @@ struct Component {
   String   staticText;  // for text components
   String   unit;
   float    vmin, vmax;  // for gauge
+  // update component state:
+  int      updState;    // UpdState
+  String   latestVer;
   // placement (build-time):
   int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
@@ -132,6 +136,13 @@ uint32_t lastReconnect = 0;
 uint32_t lastTouchMs = 0;
 int      cx, cy;               // screen centre (used by full-screen messages)
 
+// forward declarations (OTA helpers are defined further down)
+String fetchLatestVersion();
+long   semverNum(const String& v);
+void   runOta();
+void   drawComponent(int idx, bool clearCell);
+void   drawDashboard();
+
 // ============================ config ============================
 void loadConfig() {
   prefs.begin("cfg", true);
@@ -154,7 +165,9 @@ void saveWiFi(const char* ssid, const char* pass) {
 static void parseComponent(JsonObject c, int page) {
   Component& k = comps[nComps];
   String t = (const char*)(c["type"] | "text");
-  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER : TEXT;
+  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER : (t == "update") ? UPDATE : TEXT;
+  k.updState   = UPD_IDLE;
+  k.latestVer  = "";
   k.title      = (const char*)(c["title"] | "");
   k.topic      = (const char*)(c["topic"] | "");
   k.staticText = (const char*)(c["text"]  | "");
@@ -366,6 +379,43 @@ void drawComponent(int idx, bool clearCell) {
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(ix + (iw - uw) / 2, by + bh - 2, c.unit.c_str());
     }
+  } else if (c.type == UPDATE) {
+    // A tappable button: check for an update, then install it.
+    uint16_t bg, border, fg;
+    String line1, line2;
+    switch (c.updState) {
+      case UPD_CHECKING:
+        bg = trackColor(); border = trackColor(); fg = TFT_LIGHTGREY;
+        line1 = "Checking..."; break;
+      case UPD_UPTODATE:
+        bg = tft.color565(24, 44, 30); border = tft.color565(40, 90, 55); fg = tft.color565(130, 220, 150);
+        line1 = "Up to date"; line2 = "v" FW_VERSION_SEM; break;
+      case UPD_AVAILABLE:
+        bg = tft.color565(30, 56, 24); border = bandGreen(); fg = bandGreen();
+        line1 = "Update now"; line2 = "\xE2\x86\x92 v" + c.latestVer; break;
+      default:  // UPD_IDLE
+        bg = trackColor(); border = tft.color565(48, 54, 70); fg = TFT_LIGHTGREY;
+        line1 = "Check for update"; line2 = "v" FW_VERSION_SEM; break;
+    }
+    int bx = ix, bby = by + 2, bw = iw, bhh = bh - 4;
+    tft.fillRoundRect(bx, bby, bw, bhh, 8, bg);
+    tft.drawRoundRect(bx, bby, bw, bhh, 8, border);
+    u8f.setFontMode(1);
+    u8f.setForegroundColor(fg);
+    int cxb = bx + bw / 2, cyb = bby + bhh / 2;
+    if (line2.length()) {
+      u8f.setFont(u8g2_font_helvB12_tf);
+      int w1 = u8f.getUTF8Width(line1.c_str());
+      u8f.drawUTF8(cxb - w1 / 2, cyb - 1, line1.c_str());
+      u8f.setFont(FONT_SMALL);
+      u8f.setForegroundColor(TFT_LIGHTGREY);
+      int w2 = u8f.getUTF8Width(line2.c_str());
+      u8f.drawUTF8(cxb - w2 / 2, cyb + 15, line2.c_str());
+    } else {
+      u8f.setFont(u8g2_font_helvB12_tf);
+      int w1 = u8f.getUTF8Width(line1.c_str());
+      u8f.drawUTF8(cxb - w1 / 2, cyb + 5, line1.c_str());
+    }
   } else { // TEXT
     String body = c.topic.length() ? (c.haveData ? c.value : "") : c.staticText;
     drawWrappedText(ix, by, iw, bh, body, stale ? staleColor() : TFT_WHITE);
@@ -415,21 +465,52 @@ void drawDashboard() {
   uiDash = true;
 }
 
-// Poll the touchscreen; tap the left/right of the nav bar to change page.
+// An update-button component was tapped: check, then (on a second tap) install.
+void handleUpdateTap(int i) {
+  Component& c = comps[i];
+  if (c.updState == UPD_AVAILABLE) {   // install the pending update
+    runOta();                          // reboots on success; redraws on failure
+    return;
+  }
+  c.updState = UPD_CHECKING;
+  drawComponent(i, true);
+  String latest = fetchLatestVersion();
+  if (!latest.length()) { c.updState = UPD_IDLE; drawComponent(i, true); return; }
+  c.latestVer = latest;
+  c.updState = (semverNum(latest) > semverNum(FW_VERSION_SEM)) ? UPD_AVAILABLE : UPD_UPTODATE;
+  drawComponent(i, true);
+}
+
+// Poll the touchscreen; tap the nav bar arrows to change page, or tap an
+// update-button component to check/install firmware.
 void handleTouch() {
-  if (!uiDash || nPages <= 1) return;
+  if (!uiDash) return;
   if (!(touchscreen.tirqTouched() && touchscreen.touched())) return;
   uint32_t now = millis();
   if (now - lastTouchMs < 350) return;
   TS_Point p = touchscreen.getPoint();
   if (p.z < 200) return;                        // ignore very light/no touch
-  int tx = map(p.x, TOUCH_MINX, TOUCH_MAXX, 0, 239);
-  int ty = map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, 319);
-  tx = constrain(tx, 0, 239); ty = constrain(ty, 0, 319);
-  if (ty < GRID_H - 10) return;                 // only taps in the nav bar
-  lastTouchMs = now;
-  if (tx < 90)       { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
-  else if (tx > 150) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
+  int tx = constrain(map(p.x, TOUCH_MINX, TOUCH_MAXX, 0, 239), 0, 239);
+  int ty = constrain(map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, 319), 0, 319);
+
+  if (ty >= GRID_H - 10) {                       // nav bar
+    if (nPages <= 1) return;
+    lastTouchMs = now;
+    if (tx < 90)       { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
+    else if (tx > 150) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
+    return;
+  }
+  // component tap on the current page
+  for (int i = 0; i < nComps; i++) {
+    if (comps[i].page != currentPage || !comps[i].placed) continue;
+    if (comps[i].type == UPDATE &&
+        tx >= comps[i].rx && tx < comps[i].rx + comps[i].rw &&
+        ty >= comps[i].ry && ty < comps[i].ry + comps[i].rh) {
+      lastTouchMs = now;
+      handleUpdateTap(i);
+      return;
+    }
+  }
 }
 
 void showMessage(const char* l1, const char* l2 = nullptr) {

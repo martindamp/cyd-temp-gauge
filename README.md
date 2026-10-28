@@ -15,6 +15,7 @@ are configured at runtime on the device's own web page.
 | `gauge` | Coloured ring gauge (blue/green/red bands by value third) with the value in the centre | `title`, `topic`, `min`, `max`, `unit` |
 | `counter` | A large number from a topic, with a title and optional unit | `title`, `topic`, `unit` |
 | `text` | Static text, dynamic text from a topic, or nothing | `title`, and `text` (static) **or** `topic` (dynamic) |
+| `update` | A touchable button: tap to check for a firmware update, tap again to install it | `title` (no topic needed) |
 
 Components are laid out on a fixed **3-row × 2-col** grid (rows 0–2, cols 0–1, so
 up to 6 components). Each component may set `row` and `col`; omit them to
