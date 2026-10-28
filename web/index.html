@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="da">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -96,7 +96,7 @@
   <main>
     <span class="badge">ESP32-2432S028R</span>
     <h1>CYD Temp Gauge — Flasher</h1>
-    <p class="lead">Flash den seneste firmware direkte til din Cheap Yellow Display fra browseren. Ingen Arduino IDE eller PlatformIO nødvendig.</p>
+    <p class="lead">Flash the latest firmware straight to your Cheap Yellow Display from the browser. No Arduino IDE or PlatformIO needed.</p>
 
     <div class="card">
       <div class="flash-row">
@@ -109,40 +109,40 @@
           </button>
         </esp-web-install-button>
         <div class="unsupported">
-          Din browser understøtter ikke Web Serial. Brug <strong>Chrome</strong> eller <strong>Edge</strong> på en computer (ikke mobil).
+          Your browser does not support Web Serial. Use <strong>Chrome</strong> or <strong>Edge</strong> on a computer (not mobile).
         </div>
       </div>
     </div>
 
     <div class="card">
-      <strong>Sådan gør du</strong>
+      <strong>How to</strong>
       <ol>
-        <li>Åbn siden i <strong>Chrome</strong> eller <strong>Edge</strong> på en computer.</li>
-        <li>Sæt CYD'en i USB.</li>
-        <li>Klik <em>Flash CYD</em> og vælg den serielle port (CH340/CP2102).</li>
-        <li>Efter flash beder siden om dit <strong>WiFi</strong> (via Improv) — tast SSID og password.</li>
-        <li>Når WiFi er oppe, åbner enhedens <strong>konfig-side</strong> automatisk — her sætter du <strong>MQTT-broker, topic</strong> m.m.</li>
-        <li>Gaugen kører. Enhedens IP vises nederst på skærmen, så du altid kan åbne konfig-siden igen.</li>
+        <li>Open this page in <strong>Chrome</strong> or <strong>Edge</strong> on a computer.</li>
+        <li>Plug the CYD into USB.</li>
+        <li>Click <em>Flash CYD</em> and pick the serial port (CH340/CP2102).</li>
+        <li>After flashing, the page asks for your <strong>WiFi</strong> (via Improv) — enter SSID and password.</li>
+        <li>Once WiFi is up, the device's <strong>config page</strong> opens automatically — set the <strong>MQTT broker, topic</strong> and more there.</li>
+        <li>The gauge runs. The device IP is shown at the bottom of the screen, so you can always reopen the config page.</li>
       </ol>
       <p class="note">
-        Ingen credentials bygges ind i firmwaren — WiFi sættes via Improv i browseren,
-        MQTT via enhedens egen konfig-side. Det hele gemmes på enheden og overlever genstart.
+        No credentials are built into the firmware — WiFi is set via Improv in the browser,
+        MQTT via the device's own config page. Everything is stored on the device and survives a restart.
       </p>
     </div>
 
     <footer>
       Build <span class="ver" id="ver">…</span> ·
-      <a href="https://github.com/martindamp/cyd-temp-gauge" target="_blank" rel="noopener">kildekode på GitHub</a>
+      <a href="https://github.com/martindamp/cyd-temp-gauge" target="_blank" rel="noopener">source on GitHub</a>
     </footer>
   </main>
 
   <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js"></script>
   <script>
-    // Vis build-versionen fra manifestet
+    // Show the build version from the manifest
     fetch("manifest.json")
       .then(r => r.json())
-      .then(m => { document.getElementById("ver").textContent = m.version || "ukendt"; })
-      .catch(() => { document.getElementById("ver").textContent = "ukendt"; });
+      .then(m => { document.getElementById("ver").textContent = m.version || "unknown"; })
+      .catch(() => { document.getElementById("ver").textContent = "unknown"; });
   </script>
 </body>
 </html>

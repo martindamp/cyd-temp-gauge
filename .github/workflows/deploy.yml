@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false   # lad deploys stå i kø — undgå at afbryde Pages-deployment
+  cancel-in-progress: false   # let deploys queue - avoid cancelling the Pages deployment
 
 jobs:
   build:

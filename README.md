@@ -1,20 +1,24 @@
-# CYD Temperatur-gauge (MQTT)
+# CYD Temperature Gauge (MQTT)
 
-Et PlatformIO-projekt til **Cheap Yellow Display** (ESP32-2432S028R, 2,8" ILI9341),
-der abonnerer på et MQTT-topic og viser temperaturen som en farvet ring-gauge
-(blå → grøn → rød) med tallet i midten.
+A PlatformIO project for the **Cheap Yellow Display** (ESP32-2432S028R, 2.8" ILI9341)
+that subscribes to an MQTT topic and shows the temperature as a coloured ring gauge
+(blue → green → red bands) with the value in the centre.
 
 ![board](https://img.shields.io/badge/board-ESP32--2432S028R-yellow)
 ![framework](https://img.shields.io/badge/framework-Arduino%20%2F%20PlatformIO-blue)
 
-## Funktioner
+## Features
 
-- Ring-gauge med farve der følger temperaturen hen over en konfigurerbar skala
-- Stort tal i 7-segment-font i midten
-- Status-prik: grøn = WiFi + MQTT ok, rød = ingen forbindelse
-- Data vises gråt ("forældet") hvis der ikke er kommet en ny besked i 60 sek.
-- Automatisk MQTT-reconnect
-- Hele TFT_eSPI-konfigurationen ligger i `platformio.ini` — biblioteket røres ikke
+- Ring gauge with three fixed colour bands across a configurable scale
+- Large 7-segment value in the centre
+- Status dot: green = WiFi + MQTT OK, red = no connection
+- Shows a "stale data" marker if no new message has arrived for 60 s
+- Automatic MQTT reconnect
+- No hardcoded credentials: WiFi via Improv Wi-Fi, everything else via the
+  device's own config page; all settings are stored in NVS and survive a restart
+- Configurable title and unit (supports accented characters and the degree sign)
+- Over-the-air (OTA) updates from GitHub Pages over validated HTTPS
+- All TFT_eSPI configuration lives in `platformio.ini` — the library is not touched
 
 ## Hardware
 
@@ -22,81 +26,85 @@ der abonnerer på et MQTT-topic og viser temperaturen som en farvet ring-gauge
 |---|---|
 | Board | ESP32-2432S028R ("Cheap Yellow Display") |
 | MCU | ESP32-WROOM-32 |
-| Display | 2,8" 240×320 ILI9341 over SPI |
-| Baggrundslys | GPIO 21 |
+| Display | 2.8" 240×320 ILI9341 over SPI |
+| Backlight | GPIO 21 |
 
-Ingen ekstra ledninger — CYD'en er et alt-i-et-board.
+No extra wiring — the CYD is an all-in-one board.
 
-## Kom i gang
+## Getting started
 
-1. Åbn mappen i VS Code med **PlatformIO**-udvidelsen.
-2. Ret toppen af `src/main.cpp`:
-   - `WIFI_SSID` / `WIFI_PASS`
-   - `MQTT_HOST`, evt. `MQTT_USER` / `MQTT_PASS`
-   - `MQTT_TOPIC` så det matcher det, der publiceres
-   - evt. `TEMP_MIN` / `TEMP_MAX` (skalaen, default 0–40 °C)
-3. **Build** → **Upload** med CYD'en i USB. Seriel-monitor på 115200 baud.
+1. Open the folder in VS Code with the **PlatformIO** extension.
+2. **Build** → **Upload** with the CYD on USB. Serial monitor at 115200 baud.
+3. The first time, the device asks for WiFi over Improv (from the web flasher
+   below) or connects with stored credentials. Then open the device's config
+   page (its IP is shown at the bottom of the screen) to set the MQTT broker,
+   topic, scale, title and unit.
 
-`lib_deps` henter TFT_eSPI og PubSubClient automatisk ved første build.
+`lib_deps` pulls in TFT_eSPI, PubSubClient, Improv Wi-Fi and U8g2 on the first build.
 
-## MQTT-payload
+## MQTT payload
 
-Koden forventer et rent tal, fx `21.5`.
-Kommer temperaturen som JSON (fx `{"temperature": 21.5}`), er der en færdig
-ArduinoJson-variant i kommentaren nederst i `src/main.cpp`.
+The code expects a plain number, e.g. `21.5`.
+If the temperature arrives as JSON (e.g. `{"temperature": 21.5}`), there is a
+ready-made ArduinoJson variant in the comment at the bottom of `src/main.cpp`.
 
-## Fejlfinding
+## Troubleshooting
 
-Står udkommenteret nederst i `platformio.ini`:
+Commented out at the bottom of `platformio.ini`:
 
-- Omvendte farver → `-D TFT_INVERSION_OFF=1`
-- Rød/blå byttet om → `-D TFT_RGB_ORDER=TFT_BGR`
-- Helt sort skærm → skift `ILI9341_2_DRIVER` ud med `ILI9341_DRIVER`
+- All colours look negative/inverted → swap `TFT_INVERSION_ON` for `TFT_INVERSION_OFF`
+- Red/blue swapped → remove the `TFT_RGB_ORDER=TFT_BGR` line
+- Completely black screen → swap `ILI9341_2_DRIVER` for `ILI9341_DRIVER`
 
-(CYD-kloner varierer en smule i display-controller.)
+There is also a built-in **colour test** on the config page (Diagnostics →
+Show colour test) that shows seven named colours for diagnosing such faults.
 
-## Web-flasher (GitHub Pages)
+(CYD clones vary slightly in display controller and colour handling.)
 
-Ved hvert push til `main` bygger GitHub Actions firmwaren, samler et merged
-`.bin` og deployer en flasher-side til GitHub Pages. Derfra kan CYD'en flashes
-direkte fra browseren via **ESP Web Tools** (Web Serial) — ingen Arduino IDE
-eller PlatformIO nødvendig.
+## Web flasher (GitHub Pages)
 
-- Virker i **Chrome / Edge på desktop** (Web Serial findes ikke i Firefox/Safari/mobil)
-- Aktivér Pages én gang: **Settings → Pages → Source: "GitHub Actions"**
-- Side: `https://martindamp.github.io/cyd-temp-gauge/`
+On every push to `main`, GitHub Actions builds the firmware, merges a factory
+`.bin` and deploys a flasher page to GitHub Pages. From there the CYD can be
+flashed straight from the browser via **ESP Web Tools** (Web Serial) — no
+Arduino IDE or PlatformIO needed.
 
-> ⚠️ **Credentials:** GitHub Pages-siden (og dermed det downloadbare `.bin`) er
-> offentlig, også fra et privat repo. Hardcode derfor ikke rigtige WiFi-/MQTT-
-> oplysninger i `src/main.cpp` hvis firmwaren bygges og udstilles her. Vil du
-> kunne sætte WiFi fra browseren efter flash i stedet, bruges Improv Wi-Fi.
+- Works in **Chrome / Edge on desktop** (Web Serial is not in Firefox/Safari/mobile)
+- Enable Pages once: **Settings → Pages → Source: "GitHub Actions"**
+- Page: `https://martindamp.github.io/cyd-temp-gauge/`
 
-## OTA-opdatering (trådløst)
+The firmware ships with no credentials, so the public `.bin` on Pages contains
+no secrets. WiFi is provisioned via Improv in the browser after flashing, and
+MQTT via the device's own config page.
 
-Enheden kan opdatere sig selv over WiFi — intet kabel nødvendigt efter første flash:
+## OTA update (wireless)
 
-1. Åbn enhedens konfig-side (`http://<enhedens-ip>/` — IP'en står nederst på skærmen)
-2. Under **Firmware** → klik **Søg efter opdatering**
-3. Er der en nyere build på GitHub Pages, vises **Opdater nu** — klik den
-4. CYD'en henter app-firmwaren fra Pages, viser en progress-bar og genstarter selv i den nye version
+The device can update itself over WiFi — no cable needed after the first flash:
 
-Sådan hænger det sammen: GitHub Actions bygger app-only `firmware/firmware.bin` og
-publicerer en `version.txt` med den **semantiske version** til Pages. Enheden har sin
-egen version bygget ind og opdaterer **kun hvis Pages-versionen er nyere** — aldrig
-downgrade. `min_spiffs.csv` giver to app-partitioner, så den nye firmware skrives til
-den inaktive og bootes over.
+1. Open the device's config page (`http://<device-ip>/` — the IP is shown at the
+   bottom of the screen)
+2. Under **Firmware** → click **Check for update**
+3. If a newer build is on GitHub Pages, **Update now** appears — click it
+4. The CYD downloads the app firmware from Pages, shows a progress bar and
+   restarts itself into the new version
 
-**Udgiv en ny version:** hæv tallet i `VERSION`-filen (fx `1.2.0` → `1.2.1`) og push.
-CI bygger, og enheder i felten tilbyder opdateringen næste gang du trykker *Søg*.
-Pusher du uden at hæve `VERSION`, redeployes firmwaren, men enhederne ser den som
-samme version og tilbyder ingen opdatering.
+How it fits together: GitHub Actions builds an app-only `firmware/firmware.bin`
+and publishes a `version.txt` with the **semantic version** to Pages. The device
+has its own version compiled in and updates **only if the Pages version is newer**
+— never a downgrade. `min_spiffs.csv` provides two app partitions, so the new
+firmware is written to the inactive one and booted into.
 
-**HTTPS:** OTA validerer serverens certifikat mod kendte root-CA'er (ISRG Root X1,
-DigiCert Global Root G2, GlobalSign R3, USERTrust RSA — dækker `github.io`/Fastly),
-med NTP-tidssynkronisering. Rotation af GitHubs leaf/mellem-certifikat påvirker ikke
-OTA, så længe kæden går til en af disse langlivede roots. Rødderne ligger i
-`src/ota_certs.h` (genereret fra Mozillas CA-bundle).
+**Release a new version:** bump the number in the `VERSION` file (e.g. `1.2.0` →
+`1.2.1`) and push. CI builds, and devices in the field offer the update the next
+time you press *Check*. Pushing without bumping `VERSION` redeploys the firmware,
+but devices see it as the same version and offer no update.
 
-## Licens
+**HTTPS:** OTA validates the server certificate against known root CAs (ISRG Root
+X1, DigiCert Global Root G2, GlobalSign R3, USERTrust RSA — covering
+`github.io`/Fastly), with NTP time sync. Rotation of GitHub's leaf/intermediate
+certificate does not affect OTA as long as the chain goes to one of these
+long-lived roots. The roots live in `src/ota_certs.h` (generated from Mozilla's
+CA bundle).
+
+## License
 
 MIT

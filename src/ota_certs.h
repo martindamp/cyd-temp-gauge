@@ -1,5 +1,5 @@
-// Auto-genereret: root-CA'er til OTA over HTTPS (github.io via Fastly).
-// Kilde: Mozilla CA-bundle via Python certifi. Flere roots = robust mod CA-rotation.
+// Auto-generated: root CAs for OTA over HTTPS (github.io via Fastly).
+// Source: Mozilla CA bundle via Python certifi. Several roots = robust to CA rotation.
 // Roots: ISRG Root X1 (Let's Encrypt), DigiCert Global Root G2, GlobalSign R3, USERTrust RSA.
 #pragma once
 static const char OTA_ROOT_CAS[] =
