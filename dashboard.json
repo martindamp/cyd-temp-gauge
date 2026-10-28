@@ -7,7 +7,9 @@
         { "type": "gauge",   "row": 0, "col": 1, "title": "Outside",     "topic": "home/outside/temp", "min": -20, "max": 40, "unit": "°C" },
         { "type": "counter", "row": 1, "col": 0, "title": "Humidity",    "topic": "home/living/hum",   "unit": "%" },
         { "type": "counter", "row": 1, "col": 1, "title": "Power",       "topic": "home/power",        "unit": "W" },
-        { "type": "text",    "row": 2, "col": 0, "expand": true, "title": "Status", "topic": "home/status" }
+        { "type": "text",    "row": 2, "col": 0, "title": "Status", "topic": "home/status" }, 
+        { "type": "text",    "row": 2, "col": 1,  "title": "site", "topic": "home/status" }
+
       ]
     },
     {
