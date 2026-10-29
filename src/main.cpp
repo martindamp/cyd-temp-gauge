@@ -102,8 +102,46 @@ struct Config {
   String   cfgUrl;      // optional URL to fetch the dashboard layout from at runtime
 } cfg;
 
+// ---- colour themes ----
+// Each theme: background, primary text, dim text, panel border, accent, and the
+// three gauge bands (low/mid/high), plus the "stale data" colour. Stored as
+// 0xRRGGBB and converted to 565 by applyTheme().
+struct Theme { const char* name; uint32_t bg, text, dim, panel, accent, low, mid, high, stale; };
+const Theme THEMES[] = {
+  // name         bg        text      dim       panel     accent    low       mid       high      stale
+  { "Midnight", 0x0b0d12, 0xe9ecf2, 0x8b94a7, 0x1c2029, 0x5ab0ff, 0x0078ff, 0x1ec828, 0xff2d1e, 0x52555f },
+  { "Ocean",    0x061a26, 0xd7f0f7, 0x6f9bab, 0x103344, 0x25d0c0, 0x1e88e5, 0x00bcd4, 0xffb300, 0x3b5c66 },
+  { "Autumn",   0x1c1109, 0xf4e3cf, 0xa88468, 0x3a2414, 0xff9636, 0xffb300, 0xe8641a, 0xc62828, 0x5c4532 },
+  { "Forest",   0x0a1a0f, 0xdef0dd, 0x7fa487, 0x183d22, 0x4ad17a, 0x2e7d32, 0x9ccc3c, 0xe5a53b, 0x3a5240 },
+  { "Sunset",   0x1f0f1b, 0xfbe4ec, 0xb07f94, 0x3d1c33, 0xff7a9c, 0x7a5cff, 0xff6ec7, 0xff8a3d, 0x5e3a4f },
+  { "Mono",     0x000000, 0xffffff, 0x9a9a9a, 0x262626, 0xd0d0d0, 0x6a6a6a, 0xa0a0a0, 0xffffff, 0x4a4a4a },
+  { "Nord",     0x2e3440, 0xeceff4, 0x9aa4b8, 0x434c5e, 0x88c0d0, 0x5e81ac, 0xa3be8c, 0xbf616a, 0x56607a },
+  { "Grape",    0x15091f, 0xece1f7, 0x9a7fb8, 0x301b45, 0xb388ff, 0x7c4dff, 0xba68c8, 0xff5c8a, 0x4b3560 },
+};
+#define NTHEMES ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
+int themeIdx = 0;          // active theme
+int g_defaultTheme = 0;    // from the dashboard "theme" key
+int g_savedTheme = -1;     // user's pick stored in NVS (-1 = none)
+bool themeChosen = false;  // true once a theme is saved by the user
+uint16_t thBg, thText, thDim, thPanel, thAccent, thLow, thMid, thHigh, thStale;
+
+static uint16_t rgb565(uint32_t c) { return tft.color565((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF); }
+void applyTheme(int idx) {
+  if (idx < 0 || idx >= NTHEMES) idx = 0;
+  themeIdx = idx;
+  const Theme& t = THEMES[idx];
+  thBg = rgb565(t.bg); thText = rgb565(t.text); thDim = rgb565(t.dim);
+  thPanel = rgb565(t.panel); thAccent = rgb565(t.accent);
+  thLow = rgb565(t.low); thMid = rgb565(t.mid); thHigh = rgb565(t.high);
+  thStale = rgb565(t.stale);
+}
+int themeIndexByName(const String& n) {
+  for (int i = 0; i < NTHEMES; i++) if (n.equalsIgnoreCase(THEMES[i].name)) return i;
+  return -1;
+}
+
 // ---- dashboard components (build-time layout) ----
-enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH };
+enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH, THEME };
 enum UpdState { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE };
 struct Component {
   CompType type;
@@ -222,6 +260,7 @@ long   semverNum(const String& v);
 void   runOta();
 void   drawComponent(int idx, bool clearCell);
 void   drawDashboard();
+void   cycleTheme();
 
 // ============================ config ============================
 void loadConfig() {
@@ -233,6 +272,8 @@ void loadConfig() {
   cfg.mqttUser = prefs.getString("muser", "");
   cfg.mqttPass = prefs.getString("mpass", "");
   cfg.cfgUrl   = prefs.getString("cfgurl", "");
+  g_savedTheme = prefs.getInt("theme", -1);
+  themeChosen  = (g_savedTheme >= 0);
   prefs.end();
 }
 
@@ -289,7 +330,8 @@ static void parseComponent(JsonObject c, int page) {
   Component& k = comps[nComps];
   String t = (const char*)(c["type"] | "text");
   k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER
-               : (t == "update") ? UPDATE : (t == "graph") ? GRAPH : TEXT;
+               : (t == "update") ? UPDATE : (t == "graph") ? GRAPH
+               : (t == "theme") ? THEME : TEXT;
   k.updState   = UPD_IDLE;
   k.latestVer  = "";
   k.title      = (const char*)(c["title"] | "");
@@ -437,6 +479,7 @@ static bool parseDashboardJson(const char* json) {
   JsonDocument doc;
   if (deserializeJson(doc, json)) return false;
   g_wantLandscape = (String((const char*)(doc["orientation"] | "portrait")) == "landscape");
+  { int ti = themeIndexByName((const char*)(doc["theme"] | "")); g_defaultTheme = (ti >= 0) ? ti : 0; }
   nComps = 0; nPages = 1; currentPage = 0; nSeries = 0;
   JsonArray pages = doc["pages"].as<JsonArray>();
   if (!pages.isNull()) {
@@ -539,11 +582,11 @@ void layoutDashboard() {
 }
 
 // ============================ colours ============================
-static inline uint16_t trackColor() { return tft.color565(28, 32, 44); }
-static inline uint16_t staleColor() { return tft.color565(130, 132, 148); }
-static inline uint16_t bandBlue()   { return tft.color565(0, 120, 255); }
-static inline uint16_t bandGreen()  { return tft.color565(30, 200, 40); }
-static inline uint16_t bandRed()    { return tft.color565(255, 45, 30); }
+static inline uint16_t trackColor() { return thPanel; }
+static inline uint16_t staleColor() { return thStale; }
+static inline uint16_t bandBlue()   { return thLow; }
+static inline uint16_t bandGreen()  { return thMid; }
+static inline uint16_t bandRed()    { return thHigh; }
 
 // ============================ drawing helpers ============================
 // Draw a numeric string centred, picking the largest TFT font that fits.
@@ -554,14 +597,14 @@ void drawBigNumber(int ncx, int ncy, const String& s, int maxW, int maxH, uint16
     if (tft.textWidth(s, f) <= maxW && tft.fontHeight(f) <= maxH) { chosen = f; break; }
   }
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(color, TFT_BLACK);
+  tft.setTextColor(color, thBg);
   tft.drawString(s, ncx, ncy, chosen);
 }
 
 // Draw a ring gauge with three colour bands by value thirds.
 void drawRing(int gcx, int gcy, int rO, int rI, float vmin, float vmax, float value, bool have) {
   const int A0 = 30, A1 = 330;
-  tft.drawSmoothArc(gcx, gcy, rO, rI, A0, A1, trackColor(), TFT_BLACK, true);
+  tft.drawSmoothArc(gcx, gcy, rO, rI, A0, A1, trackColor(), thBg, true);
   if (!have) return;
   float span = vmax - vmin;
   float frac = (span != 0) ? constrain((value - vmin) / span, 0.0f, 1.0f) : 0.0f;
@@ -569,7 +612,7 @@ void drawRing(int gcx, int gcy, int rO, int rI, float vmin, float vmax, float va
   float b1 = A0 + (A1 - A0) / 3.0f;
   float b2 = A0 + 2.0f * (A1 - A0) / 3.0f;
   auto band = [&](float a, float b, uint16_t c) {
-    if (b > a + 0.5f) tft.drawSmoothArc(gcx, gcy, rO, rI, (int)lroundf(a), (int)lroundf(b), c, TFT_BLACK, true);
+    if (b > a + 0.5f) tft.drawSmoothArc(gcx, gcy, rO, rI, (int)lroundf(a), (int)lroundf(b), c, thBg, true);
   };
   if (fill > A0) band(A0, fminf(fill, b1), bandBlue());
   if (fill > b1) band(b1, fminf(fill, b2), bandGreen());
@@ -582,7 +625,7 @@ void drawWrappedText(int x, int y, int w, int h, const String& text, uint16_t co
   u8f.setFont(FONT_TEXT);
   u8f.setFontMode(1);
   u8f.setForegroundColor(color);
-  u8f.setBackgroundColor(TFT_BLACK);
+  u8f.setBackgroundColor(thBg);
   const int lineH = 15;
   int maxLines = h / lineH; if (maxLines < 1) maxLines = 1;
   if (maxLines > 8) maxLines = 8;
@@ -613,7 +656,7 @@ void drawComponent(int idx, bool clearCell) {
   Component& c = comps[idx];
   if (!c.placed) return;
   int x = c.rx, y = c.ry, w = c.rw, h = c.rh;
-  if (clearCell) tft.fillRect(x, y, w, h, TFT_BLACK);
+  if (clearCell) tft.fillRect(x, y, w, h, thBg);
   tft.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 6, trackColor());
 
   const int pad = 6;
@@ -624,8 +667,8 @@ void drawComponent(int idx, bool clearCell) {
   if (c.title.length()) {
     u8f.setFont(FONT_TITLE);
     u8f.setFontMode(1);
-    u8f.setBackgroundColor(TFT_BLACK);
-    u8f.setForegroundColor(TFT_LIGHTGREY);
+    u8f.setBackgroundColor(thBg);
+    u8f.setForegroundColor(thDim);
     int tw = u8f.getUTF8Width(c.title.c_str());
     u8f.drawUTF8(ix + (iw - tw) / 2, iy + 11, c.title.c_str());
     titleH = 16;
@@ -634,7 +677,7 @@ void drawComponent(int idx, bool clearCell) {
   if (bh < 10) return;
 
   bool stale = c.haveData && (millis() - c.lastMs > STALE_MS);
-  uint16_t numCol = !c.haveData ? TFT_DARKGREY : (stale ? staleColor() : TFT_WHITE);
+  uint16_t numCol = !c.haveData ? thDim : (stale ? staleColor() : thText);
 
   if (c.type == GAUGE) {
     int rO = min(iw, bh) / 2 - 2; if (rO < 14) rO = 14;
@@ -647,8 +690,8 @@ void drawComponent(int idx, bool clearCell) {
     drawBigNumber(gcx, gcy - (showUnit ? 6 : 0), s, (int)(2 * rI * 0.92f), numMaxH, numCol);
     if (showUnit) {
       u8f.setFont(FONT_SMALL);
-      u8f.setForegroundColor(TFT_LIGHTGREY);
-      u8f.setBackgroundColor(TFT_BLACK);
+      u8f.setForegroundColor(thDim);
+      u8f.setBackgroundColor(thBg);
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(gcx - uw / 2, gcy + rI - 3, c.unit.c_str());
     }
@@ -658,8 +701,8 @@ void drawComponent(int idx, bool clearCell) {
     drawBigNumber(ix + iw / 2, by + (bh - uH) / 2, s, iw - 4, bh - uH - 2, numCol);
     if (c.unit.length()) {
       u8f.setFont(FONT_SMALL);
-      u8f.setForegroundColor(TFT_LIGHTGREY);
-      u8f.setBackgroundColor(TFT_BLACK);
+      u8f.setForegroundColor(thDim);
+      u8f.setBackgroundColor(thBg);
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(ix + (iw - uw) / 2, by + bh - 2, c.unit.c_str());
     }
@@ -669,16 +712,16 @@ void drawComponent(int idx, bool clearCell) {
     String line1, line2;
     switch (c.updState) {
       case UPD_CHECKING:
-        bg = tft.color565(52, 66, 110); border = tft.color565(120, 150, 230); fg = TFT_WHITE; fg2 = TFT_LIGHTGREY;
+        bg = tft.color565(52, 66, 110); border = tft.color565(120, 150, 230); fg = thText; fg2 = thDim;
         line1 = "Checking..."; break;
       case UPD_UPTODATE:
-        bg = tft.color565(16, 92, 46); border = tft.color565(60, 220, 110); fg = TFT_WHITE; fg2 = tft.color565(170, 255, 200);
+        bg = tft.color565(16, 92, 46); border = tft.color565(60, 220, 110); fg = thText; fg2 = tft.color565(170, 255, 200);
         line1 = "Up to date"; line2 = "v" FW_VERSION_SEM; break;
       case UPD_AVAILABLE:
-        bg = tft.color565(28, 150, 42); border = tft.color565(90, 255, 90); fg = TFT_WHITE; fg2 = tft.color565(210, 255, 210);
+        bg = tft.color565(28, 150, 42); border = tft.color565(90, 255, 90); fg = thText; fg2 = tft.color565(210, 255, 210);
         line1 = "Update now"; line2 = "\xE2\x86\x92 v" + c.latestVer; break;
       default:  // UPD_IDLE
-        bg = tft.color565(44, 86, 180); border = tft.color565(120, 170, 255); fg = TFT_WHITE; fg2 = tft.color565(200, 216, 245);
+        bg = tft.color565(44, 86, 180); border = tft.color565(120, 170, 255); fg = thText; fg2 = tft.color565(200, 216, 245);
         line1 = "Check for update"; line2 = "v" FW_VERSION_SEM; break;
     }
     int bx = ix, bby = by + 2, bw = iw, bhh = bh - 4;
@@ -760,10 +803,10 @@ void drawComponent(int idx, bool clearCell) {
 
     // Header strip: current value (single) or colour legend (multi), + max.
     u8f.setFont(FONT_SMALL);
-    u8f.setBackgroundColor(TFT_BLACK);
+    u8f.setBackgroundColor(thBg);
     if (ns <= 1) {
       bool hv = (first >= 0) && gHave[first];
-      u8f.setForegroundColor(hv ? TFT_WHITE : TFT_DARKGREY);
+      u8f.setForegroundColor(hv ? thText : thDim);
       String cur = (hv ? String(gLast[first], 1) : String("--")) + (c.unit.length() ? " " + c.unit : "");
       u8f.drawUTF8(ix, by + 9, cur.c_str());
     } else {
@@ -774,7 +817,7 @@ void drawComponent(int idx, bool clearCell) {
         if (gHave[si]) item += " " + String(gLast[si], 0);
         tft.fillRect(lx, by + 3, 6, 6, gColor[si]);
         lx += 9;
-        u8f.setForegroundColor(TFT_WHITE);
+        u8f.setForegroundColor(thText);
         u8f.drawUTF8(lx, by + 9, item.c_str());
         lx += u8f.getUTF8Width(item.c_str()) + 8;
         if (lx > ix + iw - 24) break;   // ran out of room
@@ -782,13 +825,37 @@ void drawComponent(int idx, bool clearCell) {
     }
     if (anyN > 0) {
       char mxs[12]; dtostrf(ymx, 0, 0, mxs);
-      u8f.setForegroundColor(TFT_DARKGREY);
+      u8f.setForegroundColor(thDim);
       int mw = u8f.getUTF8Width(mxs);
       u8f.drawUTF8(ix + iw - mw, by + 9, mxs);
     }
+  } else if (c.type == THEME) {
+    // Theme switcher: a button showing the current theme name + colour swatches.
+    int bx = ix, bby = by + 2, bw = iw, bhh = bh - 4;
+    tft.fillRoundRect(bx, bby, bw, bhh, 8, thBg);
+    tft.drawRoundRect(bx, bby, bw, bhh, 8, thPanel);
+    tft.drawRoundRect(bx + 1, bby + 1, bw - 2, bhh - 2, 7, thPanel);
+    int cxb = bx + bw / 2;
+    u8f.setFontMode(1);
+    u8f.setBackgroundColor(thBg);
+    String top = c.title.length() ? c.title : String("Theme");
+    u8f.setFont(FONT_SMALL);
+    u8f.setForegroundColor(thDim);
+    int tw = u8f.getUTF8Width(top.c_str());
+    u8f.drawUTF8(cxb - tw / 2, bby + 14, top.c_str());
+    u8f.setFont(u8g2_font_helvB12_tf);
+    u8f.setForegroundColor(thAccent);
+    const char* tn = THEMES[themeIdx].name;
+    int nw = u8f.getUTF8Width(tn);
+    u8f.drawUTF8(cxb - nw / 2, bby + 34, tn);
+    // colour swatches (low/mid/high/accent)
+    uint16_t sw[4] = { thLow, thMid, thHigh, thAccent };
+    int n = 4, gap = 4, s = 12, totalW = n * s + (n - 1) * gap;
+    int sx = cxb - totalW / 2, sy = bby + bhh - s - 6;
+    if (sy > bby + 40) for (int k = 0; k < n; k++) tft.fillRoundRect(sx + k * (s + gap), sy, s, s, 3, sw[k]);
   } else { // TEXT
     String body = c.topic.length() ? (c.haveData ? c.value : "") : c.staticText;
-    drawWrappedText(ix, by, iw, bh, body, stale ? staleColor() : TFT_WHITE);
+    drawWrappedText(ix, by, iw, bh, body, stale ? staleColor() : thText);
   }
 }
 
@@ -796,12 +863,12 @@ void drawComponent(int idx, bool clearCell) {
 // Bottom bar: prev/next page arrows (when >1 page), page indicator, status dot, IP.
 void drawNavBar() {
   int y = gridH, bh = scrH - gridH, my = y + bh / 2;
-  tft.fillRect(0, y, scrW, bh, TFT_BLACK);
+  tft.fillRect(0, y, scrW, bh, thBg);
   tft.drawFastHLine(0, y, scrW, trackColor());
 
   if (nPages > 1) {
-    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, TFT_LIGHTGREY);                    // prev
-    tft.fillTriangle(scrW - 16, my, scrW - 30, my - 9, scrW - 30, my + 9, TFT_LIGHTGREY); // next
+    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, thDim);                    // prev
+    tft.fillTriangle(scrW - 16, my, scrW - 30, my - 9, scrW - 30, my + 9, thDim); // next
   }
 
   uint16_t dc = (WiFi.status() == WL_CONNECTED && mqttUp) ? TFT_GREEN : TFT_RED;
@@ -809,25 +876,25 @@ void drawNavBar() {
     int mid = scrW / 2;
     tft.fillCircle(mid - 28, y + 11, 4, dc);
     tft.setTextDatum(ML_DATUM);
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setTextColor(thDim, thBg);
     tft.drawString(String(currentPage + 1) + "/" + String(nPages), mid - 16, y + 11, 2);
     if (WiFi.status() == WL_CONNECTED) {
       tft.setTextDatum(MC_DATUM);
-      tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      tft.setTextColor(thDim, thBg);
       tft.drawString(WiFi.localIP().toString(), mid, y + 25, 1);
     }
   } else {
     tft.fillCircle(scrW - 8, my, 4, dc);
     if (WiFi.status() == WL_CONNECTED) {
       tft.setTextDatum(ML_DATUM);
-      tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      tft.setTextColor(thDim, thBg);
       tft.drawString(WiFi.localIP().toString(), 6, my, 2);
     }
   }
 }
 
 void drawDashboard() {
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(thBg);
   for (int i = 0; i < nComps; i++) {
     comps[i].dirty = false;
     if (comps[i].page == currentPage) drawComponent(i, false);
@@ -883,23 +950,21 @@ void handleTouch() {
   // component tap on the current page
   for (int i = 0; i < nComps; i++) {
     if (comps[i].page != currentPage || !comps[i].placed) continue;
-    if (comps[i].type == UPDATE &&
-        tx >= comps[i].rx && tx < comps[i].rx + comps[i].rw &&
-        ty >= comps[i].ry && ty < comps[i].ry + comps[i].rh) {
-      lastTouchMs = now;
-      handleUpdateTap(i);
-      return;
-    }
+    bool hit = tx >= comps[i].rx && tx < comps[i].rx + comps[i].rw &&
+               ty >= comps[i].ry && ty < comps[i].ry + comps[i].rh;
+    if (!hit) continue;
+    if (comps[i].type == UPDATE) { lastTouchMs = now; handleUpdateTap(i); return; }
+    if (comps[i].type == THEME)  { lastTouchMs = now; cycleTheme();       return; }
   }
 }
 
 void showMessage(const char* l1, const char* l2 = nullptr) {
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(thBg);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(thText, thBg);
   tft.drawString(l1, cx, cy - 12, 4);
   if (l2) {
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setTextColor(thDim, thBg);
     tft.drawString(l2, cx, cy + 18, 2);
   }
 }
@@ -1084,7 +1149,8 @@ void handleRoot() {
          "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
-                     : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph" : "text";
+                     : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph"
+                     : comps[i].type == THEME ? "theme" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc;
     if (comps[i].type == GRAPH) {
@@ -1204,19 +1270,19 @@ void drawOtaProgress(size_t done, size_t total) {
   if (pct == last) return;
   last = pct;
   int w = 200, x = cx - w / 2, y = cy + 10, bh = 18;
-  tft.drawRect(x, y, w, bh, TFT_LIGHTGREY);
+  tft.drawRect(x, y, w, bh, thDim);
   tft.fillRect(x + 2, y + 2, (w - 4) * pct / 100, bh - 4, TFT_GREEN);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(thText, thBg);
   tft.drawString(String(pct) + "%  ", cx, y - 18, 4);
 }
 
 void runOta() {
   uiDash = false;
   mqtt.disconnect();
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(thBg);
   tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(thText, thBg);
   tft.drawString("Updating firmware", cx, cy - 40, 4);
 
   Update.onProgress(drawOtaProgress);
@@ -1227,15 +1293,15 @@ void runOta() {
   httpUpdate.rebootOnUpdate(true);
   t_httpUpdate_return r = httpUpdate.update(sc, OTA_BIN_URL);
 
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(thBg);
   tft.setTextDatum(MC_DATUM);
   if (r == HTTP_UPDATE_NO_UPDATES) {
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setTextColor(thDim, thBg);
     tft.drawString("Already up to date", cx, cy, 4);
   } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK);
+    tft.setTextColor(TFT_RED, thBg);
     tft.drawString("Update failed", cx, cy - 12, 4);
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setTextColor(thDim, thBg);
     tft.drawString(httpUpdate.getLastErrorString(), cx, cy + 16, 2);
   }
   delay(4000);
@@ -1246,8 +1312,22 @@ void runOta() {
 void applyDashboard() {
   loadDashboard();
   applyOrientation(g_wantLandscape);
+  applyTheme(themeChosen ? themeIdx : g_defaultTheme);
   layoutDashboard();
   if (uiDash) drawDashboard();
+}
+
+// Persist the active theme and advance to the next one (theme-switch button).
+void saveTheme() {
+  prefs.begin("cfg", false);
+  prefs.putInt("theme", themeIdx);
+  prefs.end();
+}
+void cycleTheme() {
+  applyTheme((themeIdx + 1) % NTHEMES);
+  themeChosen = true;
+  saveTheme();
+  drawDashboard();
 }
 
 // Fetch cfg.cfgUrl once after WiFi comes up, cache it, and apply it.
@@ -1300,9 +1380,9 @@ void handleDoUpdate() {
 // ============================ colour test ============================
 void drawColorTest() {
   uiDash = false;
-  tft.fillScreen(TFT_BLACK);
+  tft.fillScreen(thBg);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextColor(thText, thBg);
   tft.drawString("COLOUR TEST", 8, 4, 2);
   struct Row { const char* n; uint8_t r, g, b; };
   static const Row rows[7] = {
@@ -1313,11 +1393,11 @@ void drawColorTest() {
   const int y0 = 24, bh = 42;
   for (int i = 0; i < 7; i++) {
     int y = y0 + i * bh;
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextColor(thText, thBg);
     tft.drawString(rows[i].n, 8, y + 4, 4);
     char rgb[16];
     snprintf(rgb, sizeof(rgb), "%u,%u,%u", rows[i].r, rows[i].g, rows[i].b);
-    tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    tft.setTextColor(thDim, thBg);
     tft.drawString(rgb, 8, y + 26, 2);
     tft.fillRect(128, y + 2, 108, bh - 6, tft.color565(rows[i].r, rows[i].g, rows[i].b));
   }
@@ -1377,6 +1457,7 @@ void setup() {
   loadConfig();
   loadDashboard();
   applyOrientation(g_wantLandscape);   // portrait or landscape per the config
+  applyTheme(themeChosen ? g_savedTheme : g_defaultTheme);   // colour theme
   layoutDashboard();
 
   improvSerial.setDeviceInfo(

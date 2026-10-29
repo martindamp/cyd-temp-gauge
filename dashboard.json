@@ -17,7 +17,8 @@
         { "type": "gauge",   "row": 0, "col": 0, "colspan": 2, "title": "Water tank", "topic": "home/water/level", "min": 0, "max": 100, "unit": "%" },
         { "type": "counter", "row": 1, "col": 0, "title": "Solar", "topic": "home/solar/power", "unit": "W" },
         { "type": "counter", "row": 1, "col": 1, "title": "Grid",  "topic": "home/grid/power",  "unit": "W" },
-        { "type": "update",  "row": 2, "col": 0, "colspan": 2, "title": "Firmware" }
+        { "type": "update",  "row": 2, "col": 0, "title": "Firmware" },
+        { "type": "theme",   "row": 2, "col": 1, "title": "Theme" }
       ]
     },
     {

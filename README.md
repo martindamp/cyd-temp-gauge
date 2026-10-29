@@ -16,6 +16,7 @@ are configured at runtime on the device's own web page.
 | `counter` | A large number from a topic, with a title and optional unit | `title`, `topic`, `unit` |
 | `text` | Static text, dynamic text from a topic, or nothing | `title`, and `text` (static) **or** `topic` (dynamic) |
 | `update` | A touchable button: tap to check for a firmware update, tap again to install it | `title` (no topic needed) |
+| `theme` | A touchable button showing the current colour theme; tap to cycle through the themes (saved on the device) | `title` (no topic needed) |
 | `graph` | A rolling chart of one or more numeric topics over time (built on the device) | `title`, `topic`, `unit`, `min`, `max` (omit `max` to auto-scale), `interval` (seconds between samples, default 120), `series` (multi-line), `fill` |
 
 The display can be **portrait** (default) or **landscape**, chosen with a
@@ -71,6 +72,21 @@ rows tall) and `colspan` (1–3, how many columns wide). Omit `row`/`col` to
 auto-place in the next free cell. A component spanning the whole page sets both,
 e.g. a `graph` with `"rowspan": 3, "colspan": 2` (portrait) fills the page.
 (`expand: true` is still accepted as a deprecated alias for "full width".)
+
+### Colour themes
+
+A top-level `"theme"` key sets the colour scheme. Eight are built in:
+`Midnight` (default), `Ocean`, `Autumn`, `Forest`, `Sunset`, `Mono`, `Nord`,
+`Grape`. Each defines the background, text, panel borders, an accent and the
+three gauge bands. Add a `theme`-type component for an on-screen button that
+cycles through them; the chosen theme is saved on the device (NVS) and overrides
+the config default until you pick another.
+
+```json
+{ "theme": "ocean", "pages": [ ... ] }
+```
+
+### Graphs
 
 The `graph` component keeps its own rolling history on the device — you only
 need to publish the current value to its topic (e.g. an HA automation that

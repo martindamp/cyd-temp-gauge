@@ -4,7 +4,7 @@
 # (local and CI) via `extra_scripts = pre:tools/gen_dashboard.py` in platformio.ini.
 import os, json, sys
 
-VALID_TYPES = {"gauge", "counter", "text", "update", "graph"}
+VALID_TYPES = {"gauge", "counter", "text", "update", "graph", "theme"}
 MAX_PER_PAGE = 6
 MAX_PAGES = 6
 
