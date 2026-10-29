@@ -18,12 +18,18 @@ are configured at runtime on the device's own web page.
 | `update` | A touchable button: tap to check for a firmware update, tap again to install it | `title` (no topic needed) |
 | `graph` | A rolling chart of one or more numeric topics over time (built on the device) | `title`, `topic`, `unit`, `min`, `max` (omit `max` to auto-scale), `interval` (seconds between samples, default 120), `series` (multi-line), `fill` |
 
-Components are laid out on a fixed **3-row × 2-col** grid (rows 0–2, cols 0–1, so
-up to 6 components). Each component may set `row` and `col`; omit them to
-auto-place it in the next free cell. Set `expand: true` to make a component fill
-the rest of its row when the other column is free (e.g. a single component in
-row 2 with `expand` spans the full width). A thin status bar at the bottom shows
-the device IP and a connection dot (green = WiFi + MQTT OK, red = not connected).
+The display can be **portrait** (default) or **landscape**, chosen with a
+top-level `"orientation"` key (`"portrait"` or `"landscape"`):
+
+- **portrait** — 240×320, a **3-row × 2-col** grid (rows 0–2, cols 0–1)
+- **landscape** — 320×240, a **2-row × 3-col** grid (rows 0–1, cols 0–2)
+
+Either way up to 6 components fit per page. Each component may set `row` and
+`col` (within the grid for the chosen orientation); omit them to auto-place it in
+the next free cell. Set `expand: true` to make a component fill the rest of its
+row (all free columns) — e.g. a single component with `expand` spans the full
+width. A thin status bar at the bottom shows the device IP and a connection dot
+(green = WiFi + MQTT OK, red = not connected).
 
 ## Dashboard configuration (`dashboard.json`)
 

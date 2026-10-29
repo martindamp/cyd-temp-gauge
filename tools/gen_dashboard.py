@@ -18,8 +18,8 @@ def validate_component(where, c):
     if r is not None and r not in (0, 1, 2):
         raise ValueError("dashboard.json: %s has row %r (must be 0, 1 or 2)" % (where, r))
     col = c.get("col")
-    if col is not None and col not in (0, 1):
-        raise ValueError("dashboard.json: %s has col %r (must be 0 or 1)" % (where, col))
+    if col is not None and col not in (0, 1, 2):
+        raise ValueError("dashboard.json: %s has col %r (must be 0, 1 or 2)" % (where, col))
     rs = c.get("rowspan")
     if rs is not None and rs not in (1, 2, 3):
         raise ValueError("dashboard.json: %s has rowspan %r (must be 1, 2 or 3)" % (where, rs))

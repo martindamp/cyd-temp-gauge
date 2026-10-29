@@ -60,7 +60,12 @@
 #define MAX_PAGES      6
 #define MAX_PER_PAGE   6
 #define MAX_COMPONENTS (MAX_PAGES * MAX_PER_PAGE)
-#define GRID_H         286         // screen height used by the grid; the rest is the nav bar
+#define NAV_H          34          // bottom nav-bar height; the rest is the grid
+// Screen/grid geometry, set by applyOrientation() (portrait or landscape).
+int  scrW = 240, scrH = 320, gridH = 320 - NAV_H;
+int  gCols = 2, gRows = 3;         // grid columns x rows (portrait 2x3, landscape 3x2)
+bool landscape = false;
+bool g_wantLandscape = false;      // parsed from the dashboard "orientation" key
 
 // CYD resistive touch (XPT2046) on a separate SPI bus
 #define XPT2046_IRQ   36
@@ -429,6 +434,7 @@ bool fetchConfig(String& out, String& err) {
 static bool parseDashboardJson(const char* json) {
   JsonDocument doc;
   if (deserializeJson(doc, json)) return false;
+  g_wantLandscape = (String((const char*)(doc["orientation"] | "portrait")) == "landscape");
   nComps = 0; nPages = 1; currentPage = 0; nSeries = 0;
   JsonArray pages = doc["pages"].as<JsonArray>();
   if (!pages.isNull()) {
@@ -458,28 +464,46 @@ void loadDashboard() {
 // Fixed 3-row x 2-col grid per page. Components keep their assigned (row,col);
 // those without a valid assignment are auto-placed into the next free cell.
 // expand=true fills the row (both columns) when free; rowspan grows downward.
-#define GRID_COLS 2
-#define GRID_ROWS 3
-void layoutDashboard() {
-  int cw = 240 / GRID_COLS, ch = GRID_H / GRID_ROWS;
-  for (int pg = 0; pg < nPages; pg++) {
-    int grid[GRID_ROWS][GRID_COLS];
-    for (int r = 0; r < GRID_ROWS; r++)
-      for (int c = 0; c < GRID_COLS; c++) grid[r][c] = -1;
+// Apply display orientation: portrait (2 cols x 3 rows, 240x320) or
+// landscape (3 cols x 2 rows, 320x240). Sets rotation and all geometry.
+void applyOrientation(bool ls) {
+  landscape = ls;
+  tft.setRotation(ls ? 1 : 0);
+  touchscreen.setRotation(0);        // raw ADC; handleTouch() maps per orientation
+  scrW  = tft.width();
+  scrH  = tft.height();
+  gridH = scrH - NAV_H;
+  gCols = ls ? 3 : 2;
+  gRows = ls ? 2 : 3;
+  cx = scrW / 2;
+  cy = scrH / 2;
+}
 
-    auto freeBlock = [&](int r, int c, int rs, bool both) -> bool {
-      if (r < 0 || c < 0 || c >= GRID_COLS || r + rs > GRID_ROWS) return false;
+#define GRID_MAX 3                    // max of gCols/gRows in either orientation
+void layoutDashboard() {
+  int cw = scrW / gCols, ch = gridH / gRows;
+  for (int pg = 0; pg < nPages; pg++) {
+    int grid[GRID_MAX][GRID_MAX];
+    for (int r = 0; r < gRows; r++)
+      for (int c = 0; c < gCols; c++) grid[r][c] = -1;
+
+    // A "full" block spans the whole width (all columns) for rs rows.
+    auto freeBlock = [&](int r, int c, int rs, bool full) -> bool {
+      if (r < 0 || c < 0 || c >= gCols || r + rs > gRows) return false;
       for (int rr = r; rr < r + rs; rr++) {
-        if (grid[rr][c] != -1) return false;
-        if (both && grid[rr][1 - c] != -1) return false;
+        if (full) { for (int cc = 0; cc < gCols; cc++) if (grid[rr][cc] != -1) return false; }
+        else if (grid[rr][c] != -1) return false;
       }
       return true;
     };
-    auto occupy = [&](int i, int r, int c, int rs, bool both) {
-      for (int rr = r; rr < r + rs; rr++) { grid[rr][c] = i; if (both) grid[rr][1 - c] = i; }
+    auto occupy = [&](int i, int r, int c, int rs, bool full) {
+      for (int rr = r; rr < r + rs; rr++) {
+        if (full) { for (int cc = 0; cc < gCols; cc++) grid[rr][cc] = i; }
+        else grid[rr][c] = i;
+      }
       comps[i].row = r; comps[i].col = c;
-      comps[i].rx = both ? 0 : c * cw;
-      comps[i].rw = both ? GRID_COLS * cw : cw;
+      comps[i].rx = full ? 0 : c * cw;
+      comps[i].rw = full ? scrW : cw;
       comps[i].ry = r * ch;
       comps[i].rh = rs * ch;
       comps[i].placed = true;
@@ -497,9 +521,9 @@ void layoutDashboard() {
     // Pass 2: auto-place the rest into the first free cell (single row).
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != pg || comps[i].placed) continue;
-      for (int r = 0; r < GRID_ROWS && !comps[i].placed; r++)
-        for (int c = 0; c < GRID_COLS && !comps[i].placed; c++)
-          if (grid[r][c] == -1) occupy(i, r, c, 1, comps[i].expand && grid[r][1 - c] == -1);
+      for (int r = 0; r < gRows && !comps[i].placed; r++)
+        for (int c = 0; c < gCols && !comps[i].placed; c++)
+          if (grid[r][c] == -1) occupy(i, r, c, 1, comps[i].expand && freeBlock(r, 0, 1, true));
     }
   }
 }
@@ -761,32 +785,33 @@ void drawComponent(int idx, bool clearCell) {
 // ============================ nav bar + full dashboard ============================
 // Bottom bar: prev/next page arrows (when >1 page), page indicator, status dot, IP.
 void drawNavBar() {
-  int y = GRID_H, bh = 320 - GRID_H, my = y + bh / 2;
-  tft.fillRect(0, y, 240, bh, TFT_BLACK);
-  tft.drawFastHLine(0, y, 240, trackColor());
+  int y = gridH, bh = scrH - gridH, my = y + bh / 2;
+  tft.fillRect(0, y, scrW, bh, TFT_BLACK);
+  tft.drawFastHLine(0, y, scrW, trackColor());
 
   if (nPages > 1) {
-    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, TFT_LIGHTGREY);   // prev
-    tft.fillTriangle(224, my, 210, my - 9, 210, my + 9, TFT_LIGHTGREY); // next
+    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, TFT_LIGHTGREY);                    // prev
+    tft.fillTriangle(scrW - 16, my, scrW - 30, my - 9, scrW - 30, my + 9, TFT_LIGHTGREY); // next
   }
 
   uint16_t dc = (WiFi.status() == WL_CONNECTED && mqttUp) ? TFT_GREEN : TFT_RED;
   if (nPages > 1) {
-    tft.fillCircle(92, y + 11, 4, dc);
+    int mid = scrW / 2;
+    tft.fillCircle(mid - 28, y + 11, 4, dc);
     tft.setTextDatum(ML_DATUM);
     tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    tft.drawString(String(currentPage + 1) + "/" + String(nPages), 104, y + 11, 2);
+    tft.drawString(String(currentPage + 1) + "/" + String(nPages), mid - 16, y + 11, 2);
     if (WiFi.status() == WL_CONNECTED) {
       tft.setTextDatum(MC_DATUM);
       tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-      tft.drawString(WiFi.localIP().toString(), 120, y + 25, 1);
+      tft.drawString(WiFi.localIP().toString(), mid, y + 25, 1);
     }
   } else {
-    tft.fillCircle(232, y + bh / 2, 4, dc);
+    tft.fillCircle(scrW - 8, my, 4, dc);
     if (WiFi.status() == WL_CONNECTED) {
       tft.setTextDatum(ML_DATUM);
       tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-      tft.drawString(WiFi.localIP().toString(), 6, y + bh / 2, 2);
+      tft.drawString(WiFi.localIP().toString(), 6, my, 2);
     }
   }
 }
@@ -826,14 +851,23 @@ void handleTouch() {
   if (now - lastTouchMs < 350) return;
   TS_Point p = touchscreen.getPoint();
   if (p.z < 200) return;                        // ignore very light/no touch
-  int tx = constrain(map(p.x, TOUCH_MINX, TOUCH_MAXX, 0, 239), 0, 239);
-  int ty = constrain(map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, 319), 0, 319);
+  // Map raw ADC to screen pixels; the axes swap in landscape.
+  int tx, ty;
+  if (landscape) {
+    tx = map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, scrW - 1);
+    ty = map(p.x, TOUCH_MAXX, TOUCH_MINX, 0, scrH - 1);
+  } else {
+    tx = map(p.x, TOUCH_MINX, TOUCH_MAXX, 0, scrW - 1);
+    ty = map(p.y, TOUCH_MINY, TOUCH_MAXY, 0, scrH - 1);
+  }
+  tx = constrain(tx, 0, scrW - 1);
+  ty = constrain(ty, 0, scrH - 1);
 
-  if (ty >= GRID_H - 10) {                       // nav bar
+  if (ty >= gridH - 10) {                        // nav bar
     if (nPages <= 1) return;
     lastTouchMs = now;
-    if (tx < 90)       { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
-    else if (tx > 150) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
+    if (tx < scrW * 0.3)      { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
+    else if (tx > scrW * 0.7) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
     return;
   }
   // component tap on the current page
@@ -1201,6 +1235,7 @@ void runOta() {
 // Re-read the dashboard from cache/embedded and redraw the screen.
 void applyDashboard() {
   loadDashboard();
+  applyOrientation(g_wantLandscape);
   layoutDashboard();
   if (uiDash) drawDashboard();
 }
@@ -1331,6 +1366,7 @@ void setup() {
   LittleFS.begin(true);   // mount (format on first boot) for the config cache
   loadConfig();
   loadDashboard();
+  applyOrientation(g_wantLandscape);   // portrait or landscape per the config
   layoutDashboard();
 
   improvSerial.setDeviceInfo(
