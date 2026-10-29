@@ -28,6 +28,7 @@
 #include <Update.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <LittleFS.h>              // caches the runtime dashboard config in flash
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
@@ -93,6 +94,7 @@ struct Config {
   String   ssid, pass;
   String   mqttHost, mqttUser, mqttPass;
   uint16_t mqttPort;
+  String   cfgUrl;      // optional URL to fetch the dashboard layout from at runtime
 } cfg;
 
 // ---- dashboard components (build-time layout) ----
@@ -224,6 +226,7 @@ void loadConfig() {
   cfg.mqttPort = prefs.getUShort("mport", DEF_MQTT_PORT);
   cfg.mqttUser = prefs.getString("muser", "");
   cfg.mqttPass = prefs.getString("mpass", "");
+  cfg.cfgUrl   = prefs.getString("cfgurl", "");
   prefs.end();
 }
 
@@ -369,11 +372,64 @@ static void parsePage(JsonArray arr, int page) {
   }
 }
 
-void loadDashboard() {
-  nComps = 0; nPages = 1; currentPage = 0; nSeries = 0;
-  JsonDocument doc;
-  if (deserializeJson(doc, DASHBOARD_JSON)) return;   // leave empty on parse error
+// ---- runtime dashboard config (optional, fetched from cfg.cfgUrl) ----
+#define CFG_CACHE_PATH "/dashboard.json"
 
+String cacheReadConfig() {
+  if (!LittleFS.exists(CFG_CACHE_PATH)) return "";
+  File f = LittleFS.open(CFG_CACHE_PATH, "r");
+  if (!f) return "";
+  String s = f.readString();
+  f.close();
+  return s;
+}
+bool cacheWriteConfig(const String& s) {
+  File f = LittleFS.open(CFG_CACHE_PATH, "w");
+  if (!f) return false;
+  f.print(s);
+  f.close();
+  return true;
+}
+void cacheClearConfig() {
+  if (LittleFS.exists(CFG_CACHE_PATH)) LittleFS.remove(CFG_CACHE_PATH);
+}
+
+// Fetch the dashboard config from cfg.cfgUrl. HTTPS uses setInsecure() (the
+// config is non-critical and may live on an arbitrary host); OTA stays strict.
+// Returns true and fills `out` only when the body parses as a dashboard.
+bool fetchConfig(String& out, String& err) {
+  if (WiFi.status() != WL_CONNECTED) { err = "no wifi"; return false; }
+  if (cfg.cfgUrl.isEmpty())          { err = "no url";  return false; }
+  HTTPClient http;
+  WiFiClientSecure sc;
+  bool ok;
+  if (cfg.cfgUrl.startsWith("https://")) {
+    sc.setInsecure();
+    sc.setTimeout(12000);
+    ok = http.begin(sc, cfg.cfgUrl);
+  } else {
+    ok = http.begin(cfg.cfgUrl);
+  }
+  if (!ok) { err = "bad url"; return false; }
+  http.setConnectTimeout(8000);
+  http.useHTTP10(true);
+  int code = http.GET();
+  if (code != 200) { err = "HTTP " + String(code); http.end(); return false; }
+  out = http.getString();
+  http.end();
+  JsonDocument doc;
+  if (deserializeJson(doc, out)) { err = "invalid json"; return false; }
+  if (doc["pages"].isNull() && doc["components"].isNull()) { err = "no pages/components"; return false; }
+  return true;
+}
+
+// Parse a dashboard JSON string into the component model. Returns false (and
+// leaves the model half-populated) if it doesn't yield at least one component,
+// so callers can fall back to the embedded default.
+static bool parseDashboardJson(const char* json) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json)) return false;
+  nComps = 0; nPages = 1; currentPage = 0; nSeries = 0;
   JsonArray pages = doc["pages"].as<JsonArray>();
   if (!pages.isNull()) {
     int p = 0;
@@ -388,6 +444,15 @@ void loadDashboard() {
     parsePage(doc["components"].as<JsonArray>(), 0);
     nPages = 1;
   }
+  return nComps > 0;
+}
+
+// Load the dashboard: cached runtime config if present and valid, else the
+// built-in dashboard.json embedded at build time.
+void loadDashboard() {
+  String cached = cacheReadConfig();
+  if (cached.length() && parseDashboardJson(cached.c_str())) return;
+  parseDashboardJson(DASHBOARD_JSON);
 }
 
 // Fixed 3-row x 2-col grid per page. Components keep their assigned (row,col);
@@ -954,11 +1019,24 @@ void handleRoot() {
   h += "<div class=row><div><label>Port</label><input name=mport type=number value=\"" + String(cfg.mqttPort) + "\"></div>";
   h += "<div><label>User (optional)</label><input name=muser value=\"" + esc(cfg.mqttUser) + "\"></div></div>";
   h += "<label>Password (optional)</label><input name=mpass type=password value=\"" + esc(cfg.mqttPass) + "\">";
+  h += F("</div>"
+         "<div class=card><h2>Dashboard config</h2>"
+         "<p class=hint>Optional. A URL to a JSON layout (same format as "
+         "<code>dashboard.json</code>). Fetched on boot, cached in flash, and used "
+         "instead of the built-in layout. Leave blank to use the built-in one. "
+         "HTTPS is fetched without certificate checks, so prefer a source you trust "
+         "(e.g. your own server or a GitHub raw URL).</p>");
+  h += "<label>Config URL</label><input name=cfgurl value=\"" + esc(cfg.cfgUrl) + "\" placeholder='https://raw.githubusercontent.com/you/repo/main/dashboard.json'>";
   h += F("<button class=primary>Save and restart</button></div></form>");
 
-  // Components (read-only; configured at build time in dashboard.json)
+  // Components (read-only view of the active layout)
   h += F("<div class=card><h2>Components</h2>"
-         "<p class=hint>Configured at build time in <code>dashboard.json</code>.</p>"
+         "<p class=hint>The active layout. From the config URL above if one is set, "
+         "otherwise the built-in <code>dashboard.json</code>.</p>"
+         "<div class=diag>"
+         "<button type=button class=sec id=rl onclick=reloadCfg()>Reload from URL</button>"
+         "<button type=button class=sec id=rs onclick=resetCfg()>Use built-in</button>"
+         "</div><div class=res id=cfgres></div>"
          "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
@@ -1004,6 +1082,17 @@ void handleRoot() {
          "async function doUpd(){var u=document.getElementById('upd'),r=document.getElementById('ures');"
          "u.disabled=true;u.textContent='Starting\xE2\x80\xA6';r.innerHTML='Updating \xE2\x80\x94 watch the CYD screen. The device will restart itself.';"
          "try{await fetch('/doupdate',{method:'POST'});}catch(e){}}"
+         "async function reloadCfg(){var b=document.getElementById('rl'),r=document.getElementById('cfgres');"
+         "b.disabled=true;b.textContent='Fetching\xE2\x80\xA6';r.textContent='';"
+         "try{var d=await (await fetch('/reloadconfig',{method:'POST'})).json();"
+         "if(d.ok){r.innerHTML='Loaded '+d.components+' component(s) on '+d.pages+' page(s). Refreshing\xE2\x80\xA6';setTimeout(function(){location.reload();},900);}"
+         "else{r.textContent='Failed: '+d.error;}"
+         "}catch(e){r.textContent='Error: '+e;}b.disabled=false;b.textContent='Reload from URL';}"
+         "async function resetCfg(){var b=document.getElementById('rs'),r=document.getElementById('cfgres');"
+         "b.disabled=true;b.textContent='Resetting\xE2\x80\xA6';r.textContent='';"
+         "try{var d=await (await fetch('/resetconfig',{method:'POST'})).json();"
+         "r.innerHTML='Using built-in layout ('+d.components+' component(s)). Refreshing\xE2\x80\xA6';setTimeout(function(){location.reload();},900);"
+         "}catch(e){r.textContent='Error: '+e;}b.disabled=false;b.textContent='Use built-in';}"
          "</script></main></body></html>");
   server.send(200, "text/html", h);
 }
@@ -1017,6 +1106,7 @@ void handleSave() {
   if (server.hasArg("mport")) prefs.putUShort("mport", (uint16_t)server.arg("mport").toInt());
   if (server.hasArg("muser")) prefs.putString("muser", server.arg("muser"));
   if (server.hasArg("mpass")) prefs.putString("mpass", server.arg("mpass"));
+  if (server.hasArg("cfgurl")) prefs.putString("cfgurl", server.arg("cfgurl"));
   prefs.end();
   server.send(200, "text/html",
     F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
@@ -1108,6 +1198,52 @@ void runOta() {
   drawDashboard();
 }
 
+// Re-read the dashboard from cache/embedded and redraw the screen.
+void applyDashboard() {
+  loadDashboard();
+  layoutDashboard();
+  if (uiDash) drawDashboard();
+}
+
+// Fetch cfg.cfgUrl once after WiFi comes up, cache it, and apply it.
+void maybeFetchConfigOnce() {
+  static bool done = false;
+  if (done) return;
+  if (WiFi.status() != WL_CONNECTED) return;    // wait until connected
+  done = true;
+  if (cfg.cfgUrl.isEmpty()) return;
+  String body, err;
+  if (fetchConfig(body, err)) {
+    cacheWriteConfig(body);
+    applyDashboard();
+  }
+}
+
+// POST /reloadconfig — re-fetch from the URL now, apply live, report status.
+void handleReloadConfig() {
+  if (cfg.cfgUrl.isEmpty()) {
+    server.send(200, "application/json", "{\"ok\":false,\"error\":\"no URL set\"}");
+    return;
+  }
+  String body, err;
+  if (fetchConfig(body, err)) {
+    cacheWriteConfig(body);
+    applyDashboard();
+    server.send(200, "application/json",
+      "{\"ok\":true,\"pages\":" + String(nPages) + ",\"components\":" + String(nComps) + "}");
+  } else {
+    server.send(200, "application/json", "{\"ok\":false,\"error\":\"" + err + "\"}");
+  }
+}
+
+// POST /resetconfig — drop the cached config and go back to the built-in one.
+void handleResetConfig() {
+  cacheClearConfig();
+  applyDashboard();
+  server.send(200, "application/json",
+    "{\"ok\":true,\"components\":" + String(nComps) + "}");
+}
+
 void handleDoUpdate() {
   server.send(200, "text/html",
     F("<meta charset=utf-8><body style='font-family:system-ui,sans-serif;background:#11131a;color:#e9ecf2;padding:40px;text-align:center'>"
@@ -1164,6 +1300,8 @@ void startServer() {
   server.on("/doupdate", HTTP_POST, handleDoUpdate);
   server.on("/colortest", HTTP_POST, handleColorTest);
   server.on("/dashboard", HTTP_POST, handleDash);
+  server.on("/reloadconfig", HTTP_POST, handleReloadConfig);
+  server.on("/resetconfig", HTTP_POST, handleResetConfig);
   server.begin();
   serverStarted = true;
 }
@@ -1190,6 +1328,7 @@ void setup() {
   touchscreen.begin(touchSPI);
   touchscreen.setRotation(0);
 
+  LittleFS.begin(true);   // mount (format on first boot) for the config cache
   loadConfig();
   loadDashboard();
   layoutDashboard();
@@ -1228,6 +1367,7 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED && !serverStarted) startServer();
   if (serverStarted) server.handleClient();
+  maybeFetchConfigOnce();
 
   if (!uiDash) { delay(10); return; }
 

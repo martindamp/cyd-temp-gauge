@@ -27,9 +27,26 @@ the device IP and a connection dot (green = WiFi + MQTT OK, red = not connected)
 
 ## Dashboard configuration (`dashboard.json`)
 
-Edit `dashboard.json` and rebuild / push. A pre-build script
-(`tools/gen_dashboard.py`) validates it and embeds it into the firmware, so the
-layout is fixed in each build.
+There are two ways to supply the layout:
+
+1. **Built-in (default):** edit `dashboard.json` and rebuild / push. A pre-build
+   script (`tools/gen_dashboard.py`) validates it and embeds it into the
+   firmware.
+2. **Runtime URL (no rebuild):** set a **Config URL** on the device's web page
+   pointing at a JSON file in the same format. The device fetches it on boot,
+   caches it in flash (so it survives a reboot even if the URL is temporarily
+   unreachable), and uses it instead of the built-in layout. Use the
+   **Reload from URL** button to re-fetch and apply live without restarting, or
+   **Use built-in** to drop the cached copy. This means you only rebuild/flash
+   when the *firmware* changes — layout tweaks are just a file edit on your
+   server/repo plus a reload.
+
+   The config is fetched over HTTP, or HTTPS **without certificate validation**
+   (it's non-critical and may live on any host), so point it at a source you
+   trust — e.g. your own LAN server or a GitHub raw URL. OTA firmware updates
+   remain strictly certificate-validated.
+
+Either way the JSON format is identical:
 
 ```json
 {
