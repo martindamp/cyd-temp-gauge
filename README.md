@@ -53,8 +53,18 @@ publishes the wattage every couple of minutes). It samples that value every
 `interval` seconds; the history resets on reboot and refills over time.
 
 Optional: set `"backfill": true` on a graph to also request a historical series
-on connect (published to `<topic>/history/get`, expected back on `<topic>/history`
-as a JSON array or CSV, oldest first). Off by default.
+on connect. Off by default. Give the graph an `"entity"` (its Home Assistant
+entity id, e.g. `"sensor.power"`) and the request/reply topics are derived from a
+shared scheme, so a single HA responder can serve every graph:
+
+- request published to `home/history/get/sensor/power`
+- series expected back on `home/history/sensor/power`
+
+(the entity id with `.` → `/`). The payload of the request is
+`{"points":120,"interval":<interval>}`; the reply is a JSON array or CSV, oldest
+first. Without an `entity`, it falls back to the per-topic form
+(`<topic>/history/get` and `<topic>/history`); you can also override either topic
+explicitly with `"request_topic"` / `"history_topic"`.
 
 - `"°C"` is `°C`. Accented characters and the degree sign render correctly.
 - gauge / counter topics expect a plain number (e.g. `21.5`); text topics take any text.

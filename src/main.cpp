@@ -113,6 +113,7 @@ struct Component {
   int      graphIdx;    // index into the graph buffers, or -1
   uint32_t lastSampleMs;
   bool     backfill;    // request historical data on connect
+  String   entity;      // HA entity id for backfill (e.g. "sensor.power")
   String   histTopic;   // topic HA publishes the history array to
   String   reqTopic;    // topic we publish the backfill request to
   // placement (build-time):
@@ -139,6 +140,11 @@ int       currentPage = 0;
 // Rolling sample buffers for graph components (ring buffers).
 #define GRAPH_POINTS 120
 #define MAX_GRAPHS   6
+// Shared backfill topic prefix. A graph with an "entity" requests history on
+// <HISTORY_PREFIX>/get/<entity-path> and receives it on <HISTORY_PREFIX>/<entity-path>,
+// where <entity-path> is the entity id with '.' replaced by '/'. One HA
+// responder (e.g. a pyscript service) can then serve every graph.
+#define HISTORY_PREFIX "home/history"
 float  gBuf[MAX_GRAPHS][GRAPH_POINTS];
 int    gCount[MAX_GRAPHS];
 int    gHead[MAX_GRAPHS];
@@ -207,13 +213,24 @@ static void parseComponent(JsonObject c, int page) {
   k.lastSampleMs = 0;
   k.graphIdx   = -1;
   k.backfill   = c["backfill"] | false;   // opt-in; needs an HA responder
+  k.entity     = (const char*)(c["entity"] | "");
   k.histTopic  = (const char*)(c["history_topic"] | "");
   k.reqTopic   = (const char*)(c["request_topic"] | "");
   if (k.type == GRAPH) {
     if (nGraphs < MAX_GRAPHS) { k.graphIdx = nGraphs; gCount[nGraphs] = 0; gHead[nGraphs] = 0; nGraphs++; }
-    if (k.backfill && k.topic.length()) {
-      if (!k.histTopic.length()) k.histTopic = k.topic + "/history";
-      if (!k.reqTopic.length())  k.reqTopic  = k.topic + "/history/get";
+    if (k.backfill) {
+      // Topic derivation (first match wins):
+      //  1. explicit history_topic / request_topic
+      //  2. "entity" -> shared service: <prefix>/get/<entity-path>, <prefix>/<entity-path>
+      //  3. legacy: <topic>/history/get, <topic>/history
+      if (k.entity.length()) {
+        String path = k.entity; path.replace('.', '/');
+        if (!k.histTopic.length()) k.histTopic = String(HISTORY_PREFIX) + "/" + path;
+        if (!k.reqTopic.length())  k.reqTopic  = String(HISTORY_PREFIX) + "/get/" + path;
+      } else if (k.topic.length()) {
+        if (!k.histTopic.length()) k.histTopic = k.topic + "/history";
+        if (!k.reqTopic.length())  k.reqTopic  = k.topic + "/history/get";
+      }
     }
   }
   k.page       = page;

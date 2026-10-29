@@ -22,7 +22,7 @@
     },
     {
       "components": [
-        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Power today", "topic": "home/power", "unit": "W", "min": 0, "interval": 120 }
+        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Power today", "topic": "home/power", "entity": "sensor.power", "backfill": true, "unit": "W", "min": 0, "interval": 120 }
       ]
     }
   ]
