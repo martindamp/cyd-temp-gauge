@@ -24,6 +24,15 @@
       "components": [
         { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Power today", "topic": "home/power", "entity": "sensor.power", "backfill": true, "unit": "W", "min": 0, "interval": 120 }
       ]
+    },
+    {
+      "components": [
+        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Solar strings", "unit": "W", "min": 0, "interval": 120, "backfill": true,
+          "series": [
+            { "topic": "home/solar/pv1", "entity": "sensor.pv1_power", "label": "PV1", "color": "#36d399" },
+            { "topic": "home/solar/pv2", "entity": "sensor.pv2_power", "label": "PV2", "color": "#f5b900" }
+          ] }
+      ]
     }
   ]
 }

@@ -110,12 +110,11 @@ struct Component {
   String   latestVer;
   // graph component:
   uint32_t interval;    // seconds between samples
-  int      graphIdx;    // index into the graph buffers, or -1
+  int      graphFirst;  // first series buffer slot, or -1
+  int      graphN;      // number of series
+  bool     graphFill;   // fill the area below the line (single-series look)
   uint32_t lastSampleMs;
   bool     backfill;    // request historical data on connect
-  String   entity;      // HA entity id for backfill (e.g. "sensor.power")
-  String   histTopic;   // topic HA publishes the history array to
-  String   reqTopic;    // topic we publish the backfill request to
   // placement (build-time):
   int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
@@ -137,18 +136,29 @@ int       nComps = 0;
 int       nPages = 1;
 int       currentPage = 0;
 
-// Rolling sample buffers for graph components (ring buffers).
-#define GRAPH_POINTS 120
-#define MAX_GRAPHS   6
-// Shared backfill topic prefix. A graph with an "entity" requests history on
+// Rolling sample buffers for graph series (ring buffers). A graph may have
+// several series; each series owns one buffer slot. MAX_SERIES is the total
+// number of series across all graphs; MAX_SERIES_PER_GRAPH caps one graph.
+#define GRAPH_POINTS       120
+#define MAX_SERIES         6
+#define MAX_SERIES_PER_GRAPH 4
+// Shared backfill topic prefix. A series with an "entity" requests history on
 // <HISTORY_PREFIX>/get/<entity-path> and receives it on <HISTORY_PREFIX>/<entity-path>,
 // where <entity-path> is the entity id with '.' replaced by '/'. One HA
-// responder (e.g. a pyscript service) can then serve every graph.
+// responder (e.g. a pyscript service) can then serve every graph/series.
 #define HISTORY_PREFIX "home/history"
-float  gBuf[MAX_GRAPHS][GRAPH_POINTS];
-int    gCount[MAX_GRAPHS];
-int    gHead[MAX_GRAPHS];
-int    nGraphs = 0;
+float    gBuf[MAX_SERIES][GRAPH_POINTS];
+int      gCount[MAX_SERIES];
+int      gHead[MAX_SERIES];
+String   gTopic[MAX_SERIES];    // live value topic for this series
+String   gHist[MAX_SERIES];     // backfill reply topic ("" = no backfill)
+String   gReq[MAX_SERIES];      // backfill request topic
+String   gLabel[MAX_SERIES];    // legend label
+uint16_t gColor[MAX_SERIES];    // series colour (565)
+float    gLast[MAX_SERIES];     // latest live value (sampled at the interval)
+bool     gHave[MAX_SERIES];     // a live value has arrived
+int      gComp[MAX_SERIES];     // owning component index
+int      nSeries = 0;
 
 void graphPush(int gi, float v) {
   gBuf[gi][gHead[gi]] = v;
@@ -195,6 +205,47 @@ void saveWiFi(const char* ssid, const char* pass) {
   prefs.end();
 }
 
+// "#RRGGBB" (or "RRGGBB") -> 565; returns false if not a valid hex colour.
+static bool hexTo565(const String& s, uint16_t& out) {
+  String h = s; h.trim();
+  if (h.startsWith("#")) h = h.substring(1);
+  if (h.length() != 6) return false;
+  char* end = nullptr;
+  long v = strtol(h.c_str(), &end, 16);
+  if (end == h.c_str() || *end) return false;
+  out = tft.color565((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+  return true;
+}
+
+// Register one graph series into the next free buffer slot. Derives backfill
+// topics with the same precedence used for single-topic graphs:
+//   explicit history_topic/request_topic -> entity (shared scheme) -> topic/history.
+// Returns the slot, or -1 if no slots remain.
+static int addSeries(int compIdx, const String& topic, const String& entity,
+                     const String& histOverride, const String& reqOverride,
+                     const String& label, uint16_t color, bool backfill) {
+  if (nSeries >= MAX_SERIES) return -1;
+  int si = nSeries++;
+  gCount[si] = 0; gHead[si] = 0; gHave[si] = false; gLast[si] = 0;
+  gComp[si]  = compIdx;
+  gTopic[si] = topic;
+  gLabel[si] = label;
+  gColor[si] = color;
+  gHist[si]  = histOverride;
+  gReq[si]   = reqOverride;
+  if (backfill) {
+    if (entity.length()) {
+      String path = entity; path.replace('.', '/');
+      if (!gHist[si].length()) gHist[si] = String(HISTORY_PREFIX) + "/" + path;
+      if (!gReq[si].length())  gReq[si]  = String(HISTORY_PREFIX) + "/get/" + path;
+    } else if (topic.length()) {
+      if (!gHist[si].length()) gHist[si] = topic + "/history";
+      if (!gReq[si].length())  gReq[si]  = topic + "/history/get";
+    }
+  }
+  return si;
+}
+
 static void parseComponent(JsonObject c, int page) {
   Component& k = comps[nComps];
   String t = (const char*)(c["type"] | "text");
@@ -211,27 +262,54 @@ static void parseComponent(JsonObject c, int page) {
   k.interval   = (uint32_t)(c["interval"] | 120);
   if (k.interval < 1) k.interval = 1;
   k.lastSampleMs = 0;
-  k.graphIdx   = -1;
+  k.graphFirst = -1;
+  k.graphN     = 0;
+  k.graphFill  = true;
   k.backfill   = c["backfill"] | false;   // opt-in; needs an HA responder
-  k.entity     = (const char*)(c["entity"] | "");
-  k.histTopic  = (const char*)(c["history_topic"] | "");
-  k.reqTopic   = (const char*)(c["request_topic"] | "");
   if (k.type == GRAPH) {
-    if (nGraphs < MAX_GRAPHS) { k.graphIdx = nGraphs; gCount[nGraphs] = 0; gHead[nGraphs] = 0; nGraphs++; }
-    if (k.backfill) {
-      // Topic derivation (first match wins):
-      //  1. explicit history_topic / request_topic
-      //  2. "entity" -> shared service: <prefix>/get/<entity-path>, <prefix>/<entity-path>
-      //  3. legacy: <topic>/history/get, <topic>/history
-      if (k.entity.length()) {
-        String path = k.entity; path.replace('.', '/');
-        if (!k.histTopic.length()) k.histTopic = String(HISTORY_PREFIX) + "/" + path;
-        if (!k.reqTopic.length())  k.reqTopic  = String(HISTORY_PREFIX) + "/get/" + path;
-      } else if (k.topic.length()) {
-        if (!k.histTopic.length()) k.histTopic = k.topic + "/history";
-        if (!k.reqTopic.length())  k.reqTopic  = k.topic + "/history/get";
+    // Default colour palette, used in order for series without an explicit colour.
+    const uint16_t palette[MAX_SERIES_PER_GRAPH] = {
+      tft.color565(0, 150, 210),   // teal
+      tft.color565(245, 185, 0),   // amber
+      tft.color565(80, 205, 120),  // green
+      tft.color565(235, 95, 180),  // magenta
+    };
+    JsonArray series = c["series"].as<JsonArray>();
+    int added = 0;
+    if (!series.isNull()) {
+      // Multi-series graph: each entry has its own topic/entity/label/colour.
+      for (JsonObject s : series) {
+        if (added >= MAX_SERIES_PER_GRAPH) break;
+        String stopic  = (const char*)(s["topic"]  | "");
+        String sentity = (const char*)(s["entity"] | "");
+        String shist   = (const char*)(s["history_topic"] | "");
+        String sreq    = (const char*)(s["request_topic"] | "");
+        String slabel  = (const char*)(s["label"] | "");
+        if (!slabel.length()) slabel = (const char*)(s["title"] | "");
+        if (!slabel.length() && stopic.length()) {           // default label: last topic segment
+          int sl = stopic.lastIndexOf('/'); slabel = (sl >= 0) ? stopic.substring(sl + 1) : stopic;
+        }
+        uint16_t scol = palette[added];
+        if (s["color"].is<const char*>()) hexTo565((const char*)s["color"], scol);
+        int si = addSeries(nComps, stopic, sentity, shist, sreq, slabel, scol, k.backfill);
+        if (si < 0) break;
+        if (k.graphFirst < 0) k.graphFirst = si;
+        added++;
       }
+      k.graphFill = c["fill"] | false;    // lines by default for multi-series
+    } else {
+      // Single-series graph from the component's own topic/entity.
+      String label = (const char*)(c["title"] | "");
+      int si = addSeries(nComps, (const char*)(c["topic"] | ""),
+                         (const char*)(c["entity"] | ""),
+                         (const char*)(c["history_topic"] | ""),
+                         (const char*)(c["request_topic"] | ""),
+                         label, palette[0], k.backfill);
+      if (si >= 0) { k.graphFirst = si; added = 1; }
+      k.graphFill = c["fill"] | true;     // filled area by default for one series
     }
+    k.graphN = added;
+    k.topic  = "";   // graph data flows through its series, not the component topic
   }
   k.page       = page;
   k.row        = c["row"] | -1;
@@ -260,7 +338,7 @@ static void parsePage(JsonArray arr, int page) {
 }
 
 void loadDashboard() {
-  nComps = 0; nPages = 1; currentPage = 0; nGraphs = 0;
+  nComps = 0; nPages = 1; currentPage = 0; nSeries = 0;
   JsonDocument doc;
   if (deserializeJson(doc, DASHBOARD_JSON)) return;   // leave empty on parse error
 
@@ -495,40 +573,83 @@ void drawComponent(int idx, bool clearCell) {
       u8f.drawUTF8(cxb - w1 / 2, cyb + 5, line1.c_str());
     }
   } else if (c.type == GRAPH) {
-    int gi = c.graphIdx;
-    int n = (gi >= 0) ? gCount[gi] : 0;
+    int ns = c.graphN, first = c.graphFirst;
     int baseY = by + bh - 1;                 // bottom of the chart
-    int chartH = bh - 2;
-    // Y scale: min from config (default 0), max from config or auto.
+    int headH = 11;                          // top strip reserved for labels
+    int chartH = baseY - (by + headH);       // plot height below the header
+    if (chartH < 4) chartH = bh - 2;         // tiny cell: use full height
+    // Shared Y scale across all series: min from config, max from config or auto.
     float ymn = c.vmin;
     float ymx = c.vmax;
     if (isnan(ymx)) {
       float mx = ymn;
-      for (int k = 0; k < n; k++) { float v = graphAt(gi, n, k); if (v > mx) mx = v; }
+      for (int s = 0; s < ns; s++) {
+        int si = first + s, n = gCount[si];
+        for (int k = 0; k < n; k++) { float v = graphAt(si, n, k); if (v > mx) mx = v; }
+      }
       ymx = (mx > ymn) ? mx * 1.1f : ymn + 1.0f;
     }
     float span = ymx - ymn; if (span <= 0) span = 1.0f;
-    uint16_t fill = tft.color565(0, 150, 210);   // teal area
-    uint16_t top  = tft.color565(90, 220, 255);  // brighter line on top
-    // Filled area: one vertical line per pixel column, sample mapped across width.
-    for (int px = 0; px < iw; px++) {
-      if (n <= 0) break;
-      int idx = (n <= 1) ? 0 : (int)((long)px * (n - 1) / (iw - 1));
-      float v = graphAt(gi, n, idx);
-      float tt = constrain((v - ymn) / span, 0.0f, 1.0f);
-      int hgt = (int)(tt * chartH);
-      int xcol = ix + px;
-      if (hgt > 0) tft.drawFastVLine(xcol, baseY - hgt, hgt, fill);
-      tft.drawPixel(xcol, baseY - hgt, top);
+    int anyN = 0;
+    for (int s = 0; s < ns; s++) { int n = gCount[first + s]; if (n > anyN) anyN = n; }
+
+    if (c.graphFill && ns == 1) {
+      // Filled area (single-series look): one vertical line per pixel column.
+      int si = first, n = gCount[si];
+      uint16_t fill = gColor[si];
+      uint16_t top  = tft.color565(90, 220, 255);
+      for (int px = 0; px < iw && n > 0; px++) {
+        int idx = (n <= 1) ? 0 : (int)((long)px * (n - 1) / (iw - 1));
+        float v = graphAt(si, n, idx);
+        float tt = constrain((v - ymn) / span, 0.0f, 1.0f);
+        int hgt = (int)(tt * chartH);
+        int xcol = ix + px;
+        if (hgt > 0) tft.drawFastVLine(xcol, baseY - hgt, hgt, fill);
+        tft.drawPixel(xcol, baseY - hgt, top);
+      }
+    } else {
+      // One polyline per series, no fill.
+      for (int s = 0; s < ns; s++) {
+        int si = first + s, n = gCount[si];
+        if (n <= 0) continue;
+        uint16_t col = gColor[si];
+        int px0 = 0, py0 = 0; bool have0 = false;
+        for (int k = 0; k < n; k++) {
+          float v = graphAt(si, n, k);
+          float tt = constrain((v - ymn) / span, 0.0f, 1.0f);
+          int x = ix + (n <= 1 ? 0 : (int)((long)k * (iw - 1) / (n - 1)));
+          int y = baseY - (int)(tt * chartH);
+          if (have0)        tft.drawLine(px0, py0, x, y, col);
+          else if (n == 1)  tft.drawPixel(x, y, col);
+          px0 = x; py0 = y; have0 = true;
+        }
+      }
     }
     tft.drawFastHLine(ix, baseY + 1, iw, trackColor());
-    // Current value (top-left) + max label (top-right)
+
+    // Header strip: current value (single) or colour legend (multi), + max.
     u8f.setFont(FONT_SMALL);
     u8f.setBackgroundColor(TFT_BLACK);
-    u8f.setForegroundColor(c.haveData ? TFT_WHITE : TFT_DARKGREY);
-    String cur = (c.haveData ? c.value : "--") + (c.unit.length() ? " " + c.unit : "");
-    u8f.drawUTF8(ix, by + 9, cur.c_str());
-    if (n > 0) {
+    if (ns <= 1) {
+      bool hv = (first >= 0) && gHave[first];
+      u8f.setForegroundColor(hv ? TFT_WHITE : TFT_DARKGREY);
+      String cur = (hv ? String(gLast[first], 1) : String("--")) + (c.unit.length() ? " " + c.unit : "");
+      u8f.drawUTF8(ix, by + 9, cur.c_str());
+    } else {
+      int lx = ix;
+      for (int s = 0; s < ns; s++) {
+        int si = first + s;
+        String item = gLabel[si];
+        if (gHave[si]) item += " " + String(gLast[si], 0);
+        tft.fillRect(lx, by + 3, 6, 6, gColor[si]);
+        lx += 9;
+        u8f.setForegroundColor(TFT_WHITE);
+        u8f.drawUTF8(lx, by + 9, item.c_str());
+        lx += u8f.getUTF8Width(item.c_str()) + 8;
+        if (lx > ix + iw - 24) break;   // ran out of room
+      }
+    }
+    if (anyN > 0) {
       char mxs[12]; dtostrf(ymx, 0, 0, mxs);
       u8f.setForegroundColor(TFT_DARKGREY);
       int mw = u8f.getUTF8Width(mxs);
@@ -679,12 +800,12 @@ void loadGraphHistory(int gi, const byte* payload, unsigned int len) {
 
 void onMqtt(char* topic, byte* payload, unsigned int len) {
   String t = topic;
-  // Graph backfill message?
-  for (int i = 0; i < nComps; i++) {
-    if (comps[i].type == GRAPH && comps[i].graphIdx >= 0 &&
-        comps[i].histTopic.length() && comps[i].histTopic == t) {
-      loadGraphHistory(comps[i].graphIdx, payload, len);
-      if (comps[i].page == currentPage) comps[i].dirty = true;
+  // Graph backfill message? (match a series' history topic)
+  for (int si = 0; si < nSeries; si++) {
+    if (gHist[si].length() && gHist[si] == t) {
+      loadGraphHistory(si, payload, len);
+      int ci = gComp[si];
+      if (ci >= 0 && comps[ci].page == currentPage) comps[ci].dirty = true;
       return;
     }
   }
@@ -694,6 +815,7 @@ void onMqtt(char* topic, byte* payload, unsigned int len) {
   memcpy(buf, payload, len);
   buf[len] = '\0';
   String val = buf; val.trim();
+  // Non-graph components bound directly to a topic.
   for (int i = 0; i < nComps; i++) {
     if (comps[i].topic.length() && comps[i].topic == t) {
       comps[i].value    = val;
@@ -703,16 +825,34 @@ void onMqtt(char* topic, byte* payload, unsigned int len) {
       comps[i].dirty    = true;
     }
   }
+  // Graph series live values.
+  for (int si = 0; si < nSeries; si++) {
+    if (gTopic[si].length() && gTopic[si] == t) {
+      gLast[si] = atof(val.c_str());
+      gHave[si] = true;
+      int ci = gComp[si];
+      if (ci >= 0) {
+        comps[ci].haveData = true;
+        comps[ci].lastMs   = millis();
+        if (comps[ci].page == currentPage) comps[ci].dirty = true;
+      }
+    }
+  }
 }
 
 void subscribeTopics() {
+  // Non-graph components.
   for (int i = 0; i < nComps; i++) {
     if (comps[i].topic.length()) mqtt.subscribe(comps[i].topic.c_str());
-    // graph backfill: subscribe to the history topic and request a fill
-    if (comps[i].type == GRAPH && comps[i].backfill && comps[i].histTopic.length()) {
-      mqtt.subscribe(comps[i].histTopic.c_str());
-      String req = "{\"points\":" + String(GRAPH_POINTS) + ",\"interval\":" + String(comps[i].interval) + "}";
-      mqtt.publish(comps[i].reqTopic.c_str(), req.c_str());
+  }
+  // Graph series: live topic, plus backfill history topic + request.
+  for (int si = 0; si < nSeries; si++) {
+    if (gTopic[si].length()) mqtt.subscribe(gTopic[si].c_str());
+    if (gHist[si].length()) {
+      mqtt.subscribe(gHist[si].c_str());
+      uint32_t iv = (gComp[si] >= 0) ? comps[gComp[si]].interval : 120;
+      String req = "{\"points\":" + String(GRAPH_POINTS) + ",\"interval\":" + String(iv) + "}";
+      mqtt.publish(gReq[si].c_str(), req.c_str());
     }
   }
 }
@@ -791,7 +931,14 @@ void handleRoot() {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
                      : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
-    String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
+    String tpc;
+    if (comps[i].type == GRAPH) {
+      for (int s = 0; s < comps[i].graphN; s++) { int si = comps[i].graphFirst + s;
+        if (gTopic[si].length()) { if (tpc.length()) tpc += ", "; tpc += gTopic[si]; } }
+      if (!tpc.length()) tpc = "-";
+    } else {
+      tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
+    }
     String pos = comps[i].placed
                     ? "p" + String(comps[i].page + 1) + " r" + String(comps[i].row) + " c" + String(comps[i].col) +
                       (comps[i].rw > 120 ? " \xE2\x86\x94" : "")
@@ -1071,11 +1218,14 @@ void loop() {
   // Sample graph components at their interval (on every page, so history keeps
   // building even while another page is shown).
   for (int i = 0; i < nComps; i++) {
-    if (comps[i].type == GRAPH && comps[i].graphIdx >= 0 && comps[i].haveData) {
+    if (comps[i].type == GRAPH && comps[i].graphFirst >= 0 && comps[i].haveData) {
       if (comps[i].lastSampleMs == 0 ||
           millis() - comps[i].lastSampleMs >= comps[i].interval * 1000UL) {
         comps[i].lastSampleMs = millis();
-        graphPush(comps[i].graphIdx, comps[i].num);
+        for (int s = 0; s < comps[i].graphN; s++) {
+          int si = comps[i].graphFirst + s;
+          if (gHave[si]) graphPush(si, gLast[si]);
+        }
         if (comps[i].page == currentPage) comps[i].dirty = true;
       }
     }

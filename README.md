@@ -16,7 +16,7 @@ are configured at runtime on the device's own web page.
 | `counter` | A large number from a topic, with a title and optional unit | `title`, `topic`, `unit` |
 | `text` | Static text, dynamic text from a topic, or nothing | `title`, and `text` (static) **or** `topic` (dynamic) |
 | `update` | A touchable button: tap to check for a firmware update, tap again to install it | `title` (no topic needed) |
-| `graph` | A rolling area chart of a numeric topic over time (built on the device) | `title`, `topic`, `unit`, `min`, `max` (omit `max` to auto-scale), `interval` (seconds between samples, default 120) |
+| `graph` | A rolling chart of one or more numeric topics over time (built on the device) | `title`, `topic`, `unit`, `min`, `max` (omit `max` to auto-scale), `interval` (seconds between samples, default 120), `series` (multi-line), `fill` |
 
 Components are laid out on a fixed **3-row × 2-col** grid (rows 0–2, cols 0–1, so
 up to 6 components). Each component may set `row` and `col`; omit them to
@@ -51,6 +51,26 @@ The `graph` component keeps its own rolling history on the device — you only
 need to publish the current value to its topic (e.g. an HA automation that
 publishes the wattage every couple of minutes). It samples that value every
 `interval` seconds; the history resets on reboot and refills over time.
+
+**Multiple series:** instead of a single `topic`, give a `graph` a `series`
+array (up to 4) to plot several lines on one chart with a shared Y scale and a
+colour legend:
+
+```json
+{ "type": "graph", "title": "Solar strings", "unit": "W", "min": 0, "backfill": true,
+  "series": [
+    { "topic": "home/solar/pv1", "entity": "sensor.pv1_power", "label": "PV1", "color": "#36d399" },
+    { "topic": "home/solar/pv2", "entity": "sensor.pv2_power", "label": "PV2", "color": "#f5b900" }
+  ]
+}
+```
+
+Each series takes its own `topic` (live value), optional `entity`/`history_topic`/
+`request_topic` (backfill, as above), `label` (legend) and `color` (`#RRGGBB`;
+a default palette is used otherwise). A multi-series graph is drawn as lines
+with no fill; a single-series graph is a filled area by default. Set `"fill":
+false` to force lines, or `"fill": true` on a one-series graph to keep the fill.
+Across all graphs the device holds up to 6 series buffers in total.
 
 Optional: set `"backfill": true` on a graph to also request a historical series
 on connect. Off by default. Give the graph an `"entity"` (its Home Assistant
