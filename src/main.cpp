@@ -155,10 +155,39 @@ String   gHist[MAX_SERIES];     // backfill reply topic ("" = no backfill)
 String   gReq[MAX_SERIES];      // backfill request topic
 String   gLabel[MAX_SERIES];    // legend label
 uint16_t gColor[MAX_SERIES];    // series colour (565)
-float    gLast[MAX_SERIES];     // latest live value (sampled at the interval)
+float    gLast[MAX_SERIES];     // latest live value (shown in the legend)
 bool     gHave[MAX_SERIES];     // a live value has arrived
 int      gComp[MAX_SERIES];     // owning component index
+// Aggregation of the values that arrive within one sample interval.
+enum AggMode { AGG_AVG, AGG_MAX, AGG_MIN, AGG_LAST };
+uint8_t  gAgg[MAX_SERIES];      // AggMode
+float    gAcc[MAX_SERIES];      // running sum (avg) or extremum (max/min) this bucket
+int      gAccN[MAX_SERIES];     // values accumulated this bucket
 int      nSeries = 0;
+
+static uint8_t parseAgg(const char* s) {
+  String a = s ? s : "";
+  if (a == "max") return AGG_MAX;
+  if (a == "min") return AGG_MIN;
+  if (a == "last") return AGG_LAST;
+  return AGG_AVG;   // default
+}
+// Fold one incoming value into the current bucket for series si.
+void aggAccumulate(int si, float v) {
+  if (gAccN[si] == 0) { gAcc[si] = v; gAccN[si] = 1; return; }
+  switch (gAgg[si]) {
+    case AGG_MAX:  if (v > gAcc[si]) gAcc[si] = v; gAccN[si]++; break;
+    case AGG_MIN:  if (v < gAcc[si]) gAcc[si] = v; gAccN[si]++; break;
+    case AGG_LAST: gAcc[si] = v;                   gAccN[si]++; break;
+    default:       gAcc[si] += v;                  gAccN[si]++; break;  // AVG
+  }
+}
+// Resolve the bucket to a single value, then reset it.
+float aggFlush(int si) {
+  float out = (gAgg[si] == AGG_AVG && gAccN[si] > 0) ? gAcc[si] / gAccN[si] : gAcc[si];
+  gAcc[si] = 0; gAccN[si] = 0;
+  return out;
+}
 
 void graphPush(int gi, float v) {
   gBuf[gi][gHead[gi]] = v;
@@ -223,10 +252,11 @@ static bool hexTo565(const String& s, uint16_t& out) {
 // Returns the slot, or -1 if no slots remain.
 static int addSeries(int compIdx, const String& topic, const String& entity,
                      const String& histOverride, const String& reqOverride,
-                     const String& label, uint16_t color, bool backfill) {
+                     const String& label, uint16_t color, bool backfill, uint8_t agg) {
   if (nSeries >= MAX_SERIES) return -1;
   int si = nSeries++;
   gCount[si] = 0; gHead[si] = 0; gHave[si] = false; gLast[si] = 0;
+  gAgg[si]   = agg; gAcc[si] = 0; gAccN[si] = 0;
   gComp[si]  = compIdx;
   gTopic[si] = topic;
   gLabel[si] = label;
@@ -274,6 +304,7 @@ static void parseComponent(JsonObject c, int page) {
       tft.color565(80, 205, 120),  // green
       tft.color565(235, 95, 180),  // magenta
     };
+    uint8_t defAgg = parseAgg(c["agg"] | "avg");   // graph-level default aggregation
     JsonArray series = c["series"].as<JsonArray>();
     int added = 0;
     if (!series.isNull()) {
@@ -291,7 +322,8 @@ static void parseComponent(JsonObject c, int page) {
         }
         uint16_t scol = palette[added];
         if (s["color"].is<const char*>()) hexTo565((const char*)s["color"], scol);
-        int si = addSeries(nComps, stopic, sentity, shist, sreq, slabel, scol, k.backfill);
+        uint8_t sagg = s["agg"].is<const char*>() ? parseAgg((const char*)s["agg"]) : defAgg;
+        int si = addSeries(nComps, stopic, sentity, shist, sreq, slabel, scol, k.backfill, sagg);
         if (si < 0) break;
         if (k.graphFirst < 0) k.graphFirst = si;
         added++;
@@ -304,7 +336,7 @@ static void parseComponent(JsonObject c, int page) {
                          (const char*)(c["entity"] | ""),
                          (const char*)(c["history_topic"] | ""),
                          (const char*)(c["request_topic"] | ""),
-                         label, palette[0], k.backfill);
+                         label, palette[0], k.backfill, defAgg);
       if (si >= 0) { k.graphFirst = si; added = 1; }
       k.graphFill = c["fill"] | true;     // filled area by default for one series
     }
@@ -830,6 +862,7 @@ void onMqtt(char* topic, byte* payload, unsigned int len) {
     if (gTopic[si].length() && gTopic[si] == t) {
       gLast[si] = atof(val.c_str());
       gHave[si] = true;
+      aggAccumulate(si, gLast[si]);
       int ci = gComp[si];
       if (ci >= 0) {
         comps[ci].haveData = true;
@@ -1224,7 +1257,11 @@ void loop() {
         comps[i].lastSampleMs = millis();
         for (int s = 0; s < comps[i].graphN; s++) {
           int si = comps[i].graphFirst + s;
-          if (gHave[si]) graphPush(si, gLast[si]);
+          if (!gHave[si]) continue;
+          // Use the aggregated value for this bucket; if nothing arrived this
+          // interval, carry the last known value forward so the line continues.
+          float sample = (gAccN[si] > 0) ? aggFlush(si) : gLast[si];
+          graphPush(si, sample);
         }
         if (comps[i].page == currentPage) comps[i].dirty = true;
       }

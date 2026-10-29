@@ -72,6 +72,14 @@ with no fill; a single-series graph is a filled area by default. Set `"fill":
 false` to force lines, or `"fill": true` on a one-series graph to keep the fill.
 Across all graphs the device holds up to 6 series buffers in total.
 
+**Aggregation (`agg`):** when values arrive faster than the sample `interval`,
+each point is built from the values received during that interval. `agg` picks
+how: `"avg"` (default — faithful to energy, smooths noise), `"max"` (catch
+peaks/clipping), `"min"`, or `"last"` (the old behaviour: just the most recent
+value at the sample moment). Set it per graph (applies to all its series) or
+per series (overrides the graph default). If no value arrives during an
+interval, the last known value is carried forward so the line stays continuous.
+
 Optional: set `"backfill": true` on a graph to also request a historical series
 on connect. Off by default. Give the graph an `"entity"` (its Home Assistant
 entity id, e.g. `"sensor.power"`) and the request/reply topics are derived from a
