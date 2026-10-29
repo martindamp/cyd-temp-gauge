@@ -23,6 +23,9 @@ def validate_component(where, c):
     rs = c.get("rowspan")
     if rs is not None and rs not in (1, 2, 3):
         raise ValueError("dashboard.json: %s has rowspan %r (must be 1, 2 or 3)" % (where, rs))
+    cs = c.get("colspan")
+    if cs is not None and cs not in (1, 2, 3):
+        raise ValueError("dashboard.json: %s has colspan %r (must be 1, 2 or 3)" % (where, cs))
 
 
 def generate(project_dir):

@@ -1,5 +1,5 @@
 {
-  "comment": "Dashboard layout for the CYD, applied at build time. One or more pages, each a fixed 3x2 grid: row 0-2, col 0-1 (up to 6 components per page, up to 6 pages). Tap the on-screen arrows to switch pages. Each component may set row/col (omit to auto-place) and expand (fill the rest of the row when the other column is free). WiFi and the MQTT broker are still configured at runtime on the device's web page.",
+  "comment": "Dashboard layout for the CYD. Optional top-level 'orientation': 'portrait' (default, 3 rows x 2 cols) or 'landscape' (2 rows x 3 cols). One or more pages (up to 6), up to 6 components each. Tap the on-screen arrows to switch pages. Each component may set row/col (omit to auto-place), rowspan (1-3, rows tall) and colspan (1-3, cols wide). WiFi and the MQTT broker are configured at runtime on the device's web page; the layout can also be loaded at runtime from a Config URL.",
   "pages": [
     {
       "components": [
@@ -14,20 +14,20 @@
     },
     {
       "components": [
-        { "type": "gauge",   "row": 0, "col": 0, "expand": true, "title": "Water tank", "topic": "home/water/level", "min": 0, "max": 100, "unit": "%" },
+        { "type": "gauge",   "row": 0, "col": 0, "colspan": 2, "title": "Water tank", "topic": "home/water/level", "min": 0, "max": 100, "unit": "%" },
         { "type": "counter", "row": 1, "col": 0, "title": "Solar", "topic": "home/solar/power", "unit": "W" },
         { "type": "counter", "row": 1, "col": 1, "title": "Grid",  "topic": "home/grid/power",  "unit": "W" },
-        { "type": "update",  "row": 2, "col": 0, "expand": true, "title": "Firmware" }
+        { "type": "update",  "row": 2, "col": 0, "colspan": 2, "title": "Firmware" }
       ]
     },
     {
       "components": [
-        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Power today", "topic": "home/power", "entity": "sensor.power", "backfill": true, "unit": "W", "min": 0, "interval": 120, "agg": "avg" }
+        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "colspan": 2, "title": "Power today", "topic": "home/power", "entity": "sensor.power", "backfill": true, "unit": "W", "min": 0, "interval": 120, "agg": "avg" }
       ]
     },
     {
       "components": [
-        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Solar strings", "unit": "W", "min": 0, "interval": 120, "backfill": true,
+        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "colspan": 2, "title": "Solar strings", "unit": "W", "min": 0, "interval": 120, "backfill": true,
           "series": [
             { "topic": "home/solar/pv1", "entity": "sensor.pv1_power", "label": "PV1", "color": "#36d399" },
             { "topic": "home/solar/pv2", "entity": "sensor.pv2_power", "label": "PV2", "color": "#f5b900" }

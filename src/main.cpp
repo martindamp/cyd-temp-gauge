@@ -126,7 +126,8 @@ struct Component {
   int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
   int      rowspan;     // how many rows tall (1-3)
-  bool     expand;      // fill the rest of the row when the other column is free
+  int      colspan;     // how many columns wide (1-3)
+  bool     expand;      // deprecated alias: fill the whole row width
   // computed layout:
   bool     placed;
   int      rx, ry, rw, rh;
@@ -355,6 +356,7 @@ static void parseComponent(JsonObject c, int page) {
   k.row        = c["row"] | -1;
   k.col        = c["col"] | -1;
   k.rowspan    = constrain((int)(c["rowspan"] | 1), 1, 3);
+  k.colspan    = constrain((int)(c["colspan"] | 1), 1, 3);
   k.expand     = c["expand"] | false;
   k.placed     = false;
   k.rx = k.ry = k.rw = k.rh = 0;
@@ -487,43 +489,51 @@ void layoutDashboard() {
     for (int r = 0; r < gRows; r++)
       for (int c = 0; c < gCols; c++) grid[r][c] = -1;
 
-    // A "full" block spans the whole width (all columns) for rs rows.
-    auto freeBlock = [&](int r, int c, int rs, bool full) -> bool {
-      if (r < 0 || c < 0 || c >= gCols || r + rs > gRows) return false;
-      for (int rr = r; rr < r + rs; rr++) {
-        if (full) { for (int cc = 0; cc < gCols; cc++) if (grid[rr][cc] != -1) return false; }
-        else if (grid[rr][c] != -1) return false;
-      }
+    // Is the rs x cs block at (r,c) fully on-grid and free?
+    auto freeBlock = [&](int r, int c, int rs, int cs) -> bool {
+      if (r < 0 || c < 0 || c + cs > gCols || r + rs > gRows) return false;
+      for (int rr = r; rr < r + rs; rr++)
+        for (int cc = c; cc < c + cs; cc++)
+          if (grid[rr][cc] != -1) return false;
       return true;
     };
-    auto occupy = [&](int i, int r, int c, int rs, bool full) {
-      for (int rr = r; rr < r + rs; rr++) {
-        if (full) { for (int cc = 0; cc < gCols; cc++) grid[rr][cc] = i; }
-        else grid[rr][c] = i;
-      }
+    auto occupy = [&](int i, int r, int c, int rs, int cs) {
+      for (int rr = r; rr < r + rs; rr++)
+        for (int cc = c; cc < c + cs; cc++) grid[rr][cc] = i;
       comps[i].row = r; comps[i].col = c;
-      comps[i].rx = full ? 0 : c * cw;
-      comps[i].rw = full ? scrW : cw;
+      comps[i].rx = c * cw;
+      comps[i].rw = cs * cw;
       comps[i].ry = r * ch;
       comps[i].rh = rs * ch;
       comps[i].placed = true;
     };
+    // Effective column span: expand (deprecated) means the whole width.
+    auto wantCols = [&](int i, int fromCol) -> int {
+      if (comps[i].expand) return gCols - (fromCol < 0 ? 0 : fromCol);
+      return min(comps[i].colspan, gCols - (fromCol < 0 ? 0 : fromCol));
+    };
 
-    // Pass 1: explicit placements (honouring rowspan + expand).
+    // Pass 1: explicit placements (honouring rowspan + colspan/expand).
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != pg) continue;
       comps[i].placed = false;
       int r = comps[i].row, c = comps[i].col, rs = comps[i].rowspan;
       if (r < 0 || c < 0) continue;                       // auto-placed in pass 2
-      if (comps[i].expand && freeBlock(r, c, rs, true))      occupy(i, r, c, rs, true);
-      else if (freeBlock(r, c, rs, false))                   occupy(i, r, c, rs, false);
+      int c0 = comps[i].expand ? 0 : c;
+      int cs = wantCols(i, c0);
+      if (freeBlock(r, c0, rs, cs))        occupy(i, r, c0, rs, cs);
+      else if (freeBlock(r, c, rs, 1))     occupy(i, r, c, rs, 1);   // fall back to a single cell
     }
-    // Pass 2: auto-place the rest into the first free cell (single row).
+    // Pass 2: auto-place the rest into the first free block that fits.
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != pg || comps[i].placed) continue;
+      int rs = comps[i].rowspan;
       for (int r = 0; r < gRows && !comps[i].placed; r++)
-        for (int c = 0; c < gCols && !comps[i].placed; c++)
-          if (grid[r][c] == -1) occupy(i, r, c, 1, comps[i].expand && freeBlock(r, 0, 1, true));
+        for (int c = 0; c < gCols && !comps[i].placed; c++) {
+          int cs = wantCols(i, c);
+          if (freeBlock(r, c, rs, cs))      occupy(i, r, c, rs, cs);
+          else if (freeBlock(r, c, 1, 1))   occupy(i, r, c, 1, 1); // fall back to a single cell
+        }
     }
   }
 }

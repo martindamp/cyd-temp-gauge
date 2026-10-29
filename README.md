@@ -66,9 +66,11 @@ Either way the JSON format is identical:
 }
 ```
 
-Common placement keys for every type: `row` (0–2), `col` (0–1), `rowspan` (1–3),
-`expand` (bool, fill the row). Omit `row`/`col` to auto-place. A `graph` with
-`rowspan: 3` and `expand: true` fills a whole page.
+Common placement keys for every type: `row`, `col`, `rowspan` (1–3, how many
+rows tall) and `colspan` (1–3, how many columns wide). Omit `row`/`col` to
+auto-place in the next free cell. A component spanning the whole page sets both,
+e.g. a `graph` with `"rowspan": 3, "colspan": 2` (portrait) fills the page.
+(`expand: true` is still accepted as a deprecated alias for "full width".)
 
 The `graph` component keeps its own rolling history on the device — you only
 need to publish the current value to its topic (e.g. an HA automation that
