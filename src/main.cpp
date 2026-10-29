@@ -112,6 +112,9 @@ struct Component {
   uint32_t interval;    // seconds between samples
   int      graphIdx;    // index into the graph buffers, or -1
   uint32_t lastSampleMs;
+  bool     backfill;    // request historical data on connect
+  String   histTopic;   // topic HA publishes the history array to
+  String   reqTopic;    // topic we publish the backfill request to
   // placement (build-time):
   int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
@@ -203,8 +206,15 @@ static void parseComponent(JsonObject c, int page) {
   if (k.interval < 1) k.interval = 1;
   k.lastSampleMs = 0;
   k.graphIdx   = -1;
-  if (k.type == GRAPH && nGraphs < MAX_GRAPHS) {
-    k.graphIdx = nGraphs; gCount[nGraphs] = 0; gHead[nGraphs] = 0; nGraphs++;
+  k.backfill   = c["backfill"] | true;
+  k.histTopic  = (const char*)(c["history_topic"] | "");
+  k.reqTopic   = (const char*)(c["request_topic"] | "");
+  if (k.type == GRAPH) {
+    if (nGraphs < MAX_GRAPHS) { k.graphIdx = nGraphs; gCount[nGraphs] = 0; gHead[nGraphs] = 0; nGraphs++; }
+    if (k.backfill && k.topic.length()) {
+      if (!k.histTopic.length()) k.histTopic = k.topic + "/history";
+      if (!k.reqTopic.length())  k.reqTopic  = k.topic + "/history/get";
+    }
   }
   k.page       = page;
   k.row        = c["row"] | -1;
@@ -616,12 +626,56 @@ void showMessage(const char* l1, const char* l2 = nullptr) {
 }
 
 // ============================ MQTT ============================
+// Fill a graph ring buffer from a backfill payload: a JSON array ([1,2,3])
+// or a comma-separated list (1,2,3), oldest first. Keeps the last GRAPH_POINTS.
+void loadGraphHistory(int gi, const byte* payload, unsigned int len) {
+  gCount[gi] = 0; gHead[gi] = 0;
+  // find first non-space to detect JSON vs CSV
+  unsigned int s = 0;
+  while (s < len && (payload[s] == ' ' || payload[s] == '\t' || payload[s] == '\n')) s++;
+  if (s < len && payload[s] == '[') {
+    JsonDocument doc;
+    if (deserializeJson(doc, payload, len)) return;
+    JsonArray arr = doc.as<JsonArray>();
+    if (arr.isNull()) return;
+    int total = arr.size();
+    int skip = (total > GRAPH_POINTS) ? total - GRAPH_POINTS : 0;
+    int idx = 0;
+    for (JsonVariant v : arr) { if (idx++ < skip) continue; graphPush(gi, v.as<float>()); }
+  } else {
+    String csv; csv.reserve(len + 1);
+    for (unsigned int i = 0; i < len; i++) csv += (char)payload[i];
+    // count, then skip leading values so only the last GRAPH_POINTS remain
+    int total = 1; for (unsigned int i = 0; i < (unsigned)csv.length(); i++) if (csv[i] == ',') total++;
+    int skip = (total > GRAPH_POINTS) ? total - GRAPH_POINTS : 0;
+    int start = 0, n = 0;
+    while (start < csv.length()) {
+      int comma = csv.indexOf(',', start);
+      String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+      tok.trim();
+      if (n++ >= skip && tok.length()) graphPush(gi, tok.toFloat());
+      if (comma < 0) break;
+      start = comma + 1;
+    }
+  }
+}
+
 void onMqtt(char* topic, byte* payload, unsigned int len) {
+  String t = topic;
+  // Graph backfill message?
+  for (int i = 0; i < nComps; i++) {
+    if (comps[i].type == GRAPH && comps[i].graphIdx >= 0 &&
+        comps[i].histTopic.length() && comps[i].histTopic == t) {
+      loadGraphHistory(comps[i].graphIdx, payload, len);
+      if (comps[i].page == currentPage) comps[i].dirty = true;
+      return;
+    }
+  }
+  // Normal value
   char buf[64];
   if (len > sizeof(buf) - 1) len = sizeof(buf) - 1;
   memcpy(buf, payload, len);
   buf[len] = '\0';
-  String t = topic;
   String val = buf; val.trim();
   for (int i = 0; i < nComps; i++) {
     if (comps[i].topic.length() && comps[i].topic == t) {
@@ -637,6 +691,12 @@ void onMqtt(char* topic, byte* payload, unsigned int len) {
 void subscribeTopics() {
   for (int i = 0; i < nComps; i++) {
     if (comps[i].topic.length()) mqtt.subscribe(comps[i].topic.c_str());
+    // graph backfill: subscribe to the history topic and request a fill
+    if (comps[i].type == GRAPH && comps[i].backfill && comps[i].histTopic.length()) {
+      mqtt.subscribe(comps[i].histTopic.c_str());
+      String req = "{\"points\":" + String(GRAPH_POINTS) + ",\"interval\":" + String(comps[i].interval) + "}";
+      mqtt.publish(comps[i].reqTopic.c_str(), req.c_str());
+    }
   }
 }
 
@@ -945,6 +1005,7 @@ void setup() {
 
   mqtt.setServer(cfg.mqttHost.c_str(), cfg.mqttPort);
   mqtt.setCallback(onMqtt);
+  mqtt.setBufferSize(2048);          // room for graph backfill arrays
 
   WiFi.mode(WIFI_STA);
   if (cfg.ssid.length()) {
