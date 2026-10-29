@@ -52,6 +52,10 @@ need to publish the current value to its topic (e.g. an HA automation that
 publishes the wattage every couple of minutes). It samples that value every
 `interval` seconds; the history resets on reboot and refills over time.
 
+Optional: set `"backfill": true` on a graph to also request a historical series
+on connect (published to `<topic>/history/get`, expected back on `<topic>/history`
+as a JSON array or CSV, oldest first). Off by default.
+
 - `"°C"` is `°C`. Accented characters and the degree sign render correctly.
 - gauge / counter topics expect a plain number (e.g. `21.5`); text topics take any text.
 - The config page lists the configured components (read-only) with their cell, so

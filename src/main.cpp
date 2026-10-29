@@ -206,7 +206,7 @@ static void parseComponent(JsonObject c, int page) {
   if (k.interval < 1) k.interval = 1;
   k.lastSampleMs = 0;
   k.graphIdx   = -1;
-  k.backfill   = c["backfill"] | true;
+  k.backfill   = c["backfill"] | false;   // opt-in; needs an HA responder
   k.histTopic  = (const char*)(c["history_topic"] | "");
   k.reqTopic   = (const char*)(c["request_topic"] | "");
   if (k.type == GRAPH) {
