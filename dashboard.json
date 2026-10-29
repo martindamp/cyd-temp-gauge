@@ -19,6 +19,11 @@
         { "type": "counter", "row": 1, "col": 1, "title": "Grid",  "topic": "home/grid/power",  "unit": "W" },
         { "type": "update",  "row": 2, "col": 0, "expand": true, "title": "Firmware" }
       ]
+    },
+    {
+      "components": [
+        { "type": "graph", "row": 0, "col": 0, "rowspan": 3, "expand": true, "title": "Power today", "topic": "home/power", "unit": "W", "min": 0, "interval": 120 }
+      ]
     }
   ]
 }

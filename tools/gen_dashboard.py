@@ -4,7 +4,7 @@
 # (local and CI) via `extra_scripts = pre:tools/gen_dashboard.py` in platformio.ini.
 import os, json, sys
 
-VALID_TYPES = {"gauge", "counter", "text", "update"}
+VALID_TYPES = {"gauge", "counter", "text", "update", "graph"}
 MAX_PER_PAGE = 6
 MAX_PAGES = 6
 
@@ -20,6 +20,9 @@ def validate_component(where, c):
     col = c.get("col")
     if col is not None and col not in (0, 1):
         raise ValueError("dashboard.json: %s has col %r (must be 0 or 1)" % (where, col))
+    rs = c.get("rowspan")
+    if rs is not None and rs not in (1, 2, 3):
+        raise ValueError("dashboard.json: %s has rowspan %r (must be 1, 2 or 3)" % (where, rs))
 
 
 def generate(project_dir):

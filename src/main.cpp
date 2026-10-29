@@ -96,7 +96,7 @@ struct Config {
 } cfg;
 
 // ---- dashboard components (build-time layout) ----
-enum CompType { GAUGE, COUNTER, TEXT, UPDATE };
+enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH };
 enum UpdState { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE };
 struct Component {
   CompType type;
@@ -108,9 +108,14 @@ struct Component {
   // update component state:
   int      updState;    // UpdState
   String   latestVer;
+  // graph component:
+  uint32_t interval;    // seconds between samples
+  int      graphIdx;    // index into the graph buffers, or -1
+  uint32_t lastSampleMs;
   // placement (build-time):
   int      page;        // which page this component belongs to
   int      row, col;    // grid position; -1 = auto-place in the next free cell
+  int      rowspan;     // how many rows tall (1-3)
   bool     expand;      // fill the rest of the row when the other column is free
   // computed layout:
   bool     placed;
@@ -127,6 +132,25 @@ Component comps[MAX_COMPONENTS];
 int       nComps = 0;
 int       nPages = 1;
 int       currentPage = 0;
+
+// Rolling sample buffers for graph components (ring buffers).
+#define GRAPH_POINTS 120
+#define MAX_GRAPHS   6
+float  gBuf[MAX_GRAPHS][GRAPH_POINTS];
+int    gCount[MAX_GRAPHS];
+int    gHead[MAX_GRAPHS];
+int    nGraphs = 0;
+
+void graphPush(int gi, float v) {
+  gBuf[gi][gHead[gi]] = v;
+  gHead[gi] = (gHead[gi] + 1) % GRAPH_POINTS;
+  if (gCount[gi] < GRAPH_POINTS) gCount[gi]++;
+}
+// idxFromOldest: 0 = oldest kept sample, n-1 = newest
+float graphAt(int gi, int n, int idxFromOldest) {
+  int start = (gHead[gi] - n + GRAPH_POINTS) % GRAPH_POINTS;
+  return gBuf[gi][(start + idxFromOldest) % GRAPH_POINTS];
+}
 
 // ---- UI state ----
 bool     uiDash     = false;   // true when the dashboard is on screen
@@ -165,7 +189,8 @@ void saveWiFi(const char* ssid, const char* pass) {
 static void parseComponent(JsonObject c, int page) {
   Component& k = comps[nComps];
   String t = (const char*)(c["type"] | "text");
-  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER : (t == "update") ? UPDATE : TEXT;
+  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER
+               : (t == "update") ? UPDATE : (t == "graph") ? GRAPH : TEXT;
   k.updState   = UPD_IDLE;
   k.latestVer  = "";
   k.title      = (const char*)(c["title"] | "");
@@ -173,10 +198,18 @@ static void parseComponent(JsonObject c, int page) {
   k.staticText = (const char*)(c["text"]  | "");
   k.unit       = (const char*)(c["unit"]  | "");
   k.vmin       = c["min"] | 0.0f;
-  k.vmax       = c["max"] | 100.0f;
+  k.vmax       = c["max"] | ((k.type == GRAPH) ? NAN : 100.0f);  // NAN = auto-scale (graph)
+  k.interval   = (uint32_t)(c["interval"] | 120);
+  if (k.interval < 1) k.interval = 1;
+  k.lastSampleMs = 0;
+  k.graphIdx   = -1;
+  if (k.type == GRAPH && nGraphs < MAX_GRAPHS) {
+    k.graphIdx = nGraphs; gCount[nGraphs] = 0; gHead[nGraphs] = 0; nGraphs++;
+  }
   k.page       = page;
   k.row        = c["row"] | -1;
   k.col        = c["col"] | -1;
+  k.rowspan    = constrain((int)(c["rowspan"] | 1), 1, 3);
   k.expand     = c["expand"] | false;
   k.placed     = false;
   k.rx = k.ry = k.rw = k.rh = 0;
@@ -200,7 +233,7 @@ static void parsePage(JsonArray arr, int page) {
 }
 
 void loadDashboard() {
-  nComps = 0; nPages = 1; currentPage = 0;
+  nComps = 0; nPages = 1; currentPage = 0; nGraphs = 0;
   JsonDocument doc;
   if (deserializeJson(doc, DASHBOARD_JSON)) return;   // leave empty on parse error
 
@@ -221,8 +254,8 @@ void loadDashboard() {
 }
 
 // Fixed 3-row x 2-col grid per page. Components keep their assigned (row,col);
-// those without a valid assignment are auto-placed into the next free cell. A
-// component with expand=true fills the whole row when the other column is free.
+// those without a valid assignment are auto-placed into the next free cell.
+// expand=true fills the row (both columns) when free; rowspan grows downward.
 #define GRID_COLS 2
 #define GRID_ROWS 3
 void layoutDashboard() {
@@ -232,28 +265,39 @@ void layoutDashboard() {
     for (int r = 0; r < GRID_ROWS; r++)
       for (int c = 0; c < GRID_COLS; c++) grid[r][c] = -1;
 
-    // Pass 1: explicit placements on this page.
+    auto freeBlock = [&](int r, int c, int rs, bool both) -> bool {
+      if (r < 0 || c < 0 || c >= GRID_COLS || r + rs > GRID_ROWS) return false;
+      for (int rr = r; rr < r + rs; rr++) {
+        if (grid[rr][c] != -1) return false;
+        if (both && grid[rr][1 - c] != -1) return false;
+      }
+      return true;
+    };
+    auto occupy = [&](int i, int r, int c, int rs, bool both) {
+      for (int rr = r; rr < r + rs; rr++) { grid[rr][c] = i; if (both) grid[rr][1 - c] = i; }
+      comps[i].row = r; comps[i].col = c;
+      comps[i].rx = both ? 0 : c * cw;
+      comps[i].rw = both ? GRID_COLS * cw : cw;
+      comps[i].ry = r * ch;
+      comps[i].rh = rs * ch;
+      comps[i].placed = true;
+    };
+
+    // Pass 1: explicit placements (honouring rowspan + expand).
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != pg) continue;
       comps[i].placed = false;
-      int r = comps[i].row, c = comps[i].col;
-      if (r >= 0 && r < GRID_ROWS && c >= 0 && c < GRID_COLS && grid[r][c] == -1) {
-        grid[r][c] = i; comps[i].placed = true;
-      }
+      int r = comps[i].row, c = comps[i].col, rs = comps[i].rowspan;
+      if (r < 0 || c < 0) continue;                       // auto-placed in pass 2
+      if (comps[i].expand && freeBlock(r, c, rs, true))      occupy(i, r, c, rs, true);
+      else if (freeBlock(r, c, rs, false))                   occupy(i, r, c, rs, false);
     }
-    // Pass 2: auto-place the rest on this page.
+    // Pass 2: auto-place the rest into the first free cell (single row).
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != pg || comps[i].placed) continue;
       for (int r = 0; r < GRID_ROWS && !comps[i].placed; r++)
         for (int c = 0; c < GRID_COLS && !comps[i].placed; c++)
-          if (grid[r][c] == -1) { grid[r][c] = i; comps[i].row = r; comps[i].col = c; comps[i].placed = true; }
-    }
-    // Compute pixel rects for this page.
-    for (int i = 0; i < nComps; i++) {
-      if (comps[i].page != pg || !comps[i].placed) continue;
-      int r = comps[i].row, c = comps[i].col;
-      comps[i].rx = c * cw; comps[i].ry = r * ch; comps[i].rw = cw; comps[i].rh = ch;
-      if (comps[i].expand && grid[r][1 - c] == -1) { comps[i].rx = 0; comps[i].rw = GRID_COLS * cw; }
+          if (grid[r][c] == -1) occupy(i, r, c, 1, comps[i].expand && grid[r][1 - c] == -1);
     }
   }
 }
@@ -422,6 +466,46 @@ void drawComponent(int idx, bool clearCell) {
       u8f.setForegroundColor(fg);
       int w1 = u8f.getUTF8Width(line1.c_str());
       u8f.drawUTF8(cxb - w1 / 2, cyb + 5, line1.c_str());
+    }
+  } else if (c.type == GRAPH) {
+    int gi = c.graphIdx;
+    int n = (gi >= 0) ? gCount[gi] : 0;
+    int baseY = by + bh - 1;                 // bottom of the chart
+    int chartH = bh - 2;
+    // Y scale: min from config (default 0), max from config or auto.
+    float ymn = c.vmin;
+    float ymx = c.vmax;
+    if (isnan(ymx)) {
+      float mx = ymn;
+      for (int k = 0; k < n; k++) { float v = graphAt(gi, n, k); if (v > mx) mx = v; }
+      ymx = (mx > ymn) ? mx * 1.1f : ymn + 1.0f;
+    }
+    float span = ymx - ymn; if (span <= 0) span = 1.0f;
+    uint16_t fill = tft.color565(0, 150, 210);   // teal area
+    uint16_t top  = tft.color565(90, 220, 255);  // brighter line on top
+    // Filled area: one vertical line per pixel column, sample mapped across width.
+    for (int px = 0; px < iw; px++) {
+      if (n <= 0) break;
+      int idx = (n <= 1) ? 0 : (int)((long)px * (n - 1) / (iw - 1));
+      float v = graphAt(gi, n, idx);
+      float tt = constrain((v - ymn) / span, 0.0f, 1.0f);
+      int hgt = (int)(tt * chartH);
+      int xcol = ix + px;
+      if (hgt > 0) tft.drawFastVLine(xcol, baseY - hgt, hgt, fill);
+      tft.drawPixel(xcol, baseY - hgt, top);
+    }
+    tft.drawFastHLine(ix, baseY + 1, iw, trackColor());
+    // Current value (top-left) + max label (top-right)
+    u8f.setFont(FONT_SMALL);
+    u8f.setBackgroundColor(TFT_BLACK);
+    u8f.setForegroundColor(c.haveData ? TFT_WHITE : TFT_DARKGREY);
+    String cur = (c.haveData ? c.value : "--") + (c.unit.length() ? " " + c.unit : "");
+    u8f.drawUTF8(ix, by + 9, cur.c_str());
+    if (n > 0) {
+      char mxs[12]; dtostrf(ymx, 0, 0, mxs);
+      u8f.setForegroundColor(TFT_DARKGREY);
+      int mw = u8f.getUTF8Width(mxs);
+      u8f.drawUTF8(ix + iw - mw, by + 9, mxs);
     }
   } else { // TEXT
     String body = c.topic.length() ? (c.haveData ? c.value : "") : c.staticText;
@@ -628,7 +712,7 @@ void handleRoot() {
          "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
-                     : comps[i].type == UPDATE ? "update" : "text";
+                     : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc = comps[i].topic.length() ? comps[i].topic : (comps[i].type == TEXT ? String("static") : String("-"));
     String pos = comps[i].placed
@@ -905,6 +989,19 @@ void loop() {
   }
   bool conn = (WiFi.status() == WL_CONNECTED && mqttUp);
   if (conn != lastConn) { lastConn = conn; drawNavBar(); }
+
+  // Sample graph components at their interval (on every page, so history keeps
+  // building even while another page is shown).
+  for (int i = 0; i < nComps; i++) {
+    if (comps[i].type == GRAPH && comps[i].graphIdx >= 0 && comps[i].haveData) {
+      if (comps[i].lastSampleMs == 0 ||
+          millis() - comps[i].lastSampleMs >= comps[i].interval * 1000UL) {
+        comps[i].lastSampleMs = millis();
+        graphPush(comps[i].graphIdx, comps[i].num);
+        if (comps[i].page == currentPage) comps[i].dirty = true;
+      }
+    }
+  }
 
   // Redraw a component (on the current page) when it gets new data or its
   // stale state changes. Off-page components keep their state and are drawn
