@@ -2,7 +2,7 @@
 
 A PlatformIO firmware for the **Cheap Yellow Display** (ESP32‑2432S028R, 2.8"
 ILI9341) that turns the board into a small configurable MQTT dashboard: gauges,
-counters, text, charts and buttons laid out on one or more pages, in portrait or
+numbers, text, charts and buttons laid out on one or more pages, in portrait or
 landscape, with switchable colour themes — all driven by MQTT and updated
 over‑the‑air.
 
@@ -35,7 +35,7 @@ over‑the‑air.
 
 - **Up to 6 components per page**, on **up to 6 pages**, with on‑screen
   next/previous arrows to switch pages.
-- **Component types:** `gauge`, `counter`, `text`, `graph` (single or
+- **Component types:** `gauge`, `number`, `text`, `graph` (single or
   multi‑series), `update` (firmware button) and `theme` (theme switcher).
 - **Portrait or landscape** orientation, with a grid that adapts to each.
 - **8 colour themes**, switchable on the device and persisted.
@@ -202,7 +202,7 @@ bands (low / mid / high) by value thirds, themed per colour scheme.
   "topic": "home/living/temp", "min": 0, "max": 40, "unit": "°C" }
 ```
 
-#### `counter`
+#### `number`
 A large number from a topic, with a title and optional unit.
 
 | Key | Meaning |
@@ -211,8 +211,10 @@ A large number from a topic, with a title and optional unit.
 | `unit` | optional, shown after the number |
 
 ```json
-{ "type": "counter", "title": "Power", "topic": "home/power", "unit": "W" }
+{ "type": "number", "title": "Power", "topic": "home/power", "unit": "W" }
 ```
+
+> `"type": "counter"` is still accepted as a deprecated alias for `number`.
 
 #### `text`
 Static text, dynamic text from a topic, or nothing.
@@ -358,7 +360,7 @@ overrides the config default until you pick another.
 
 ## What to publish on MQTT
 
-- `gauge`, `counter` and `graph` topics expect a **plain number** payload, e.g.
+- `gauge`, `number` and `graph` topics expect a **plain number** payload, e.g.
   `21.5`.
 - `text` topics take **any string**.
 - Accented characters and the degree sign render correctly (`"°C"` → °C).

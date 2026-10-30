@@ -4,14 +4,19 @@
 # (local and CI) via `extra_scripts = pre:tools/gen_dashboard.py` in platformio.ini.
 import os, json, sys
 
-VALID_TYPES = {"gauge", "counter", "text", "update", "graph", "theme", "wifi", "mqtt"}
+VALID_TYPES = {"gauge", "number", "text", "update", "graph", "theme", "wifi", "mqtt"}
+# Old type names that are still accepted, so existing configs keep building.
+DEPRECATED_TYPES = {"counter": "number"}
 MAX_PER_PAGE = 6
 MAX_PAGES = 6
 
 
 def validate_component(where, c):
     t = c.get("type")
-    if t not in VALID_TYPES:
+    if t in DEPRECATED_TYPES:
+        print("gen_dashboard: %s uses deprecated type %r, renamed to %r"
+              % (where, t, DEPRECATED_TYPES[t]))
+    elif t not in VALID_TYPES:
         raise ValueError("dashboard.json: %s has invalid type %r (expected one of %s)"
                          % (where, t, sorted(VALID_TYPES)))
     r = c.get("row")

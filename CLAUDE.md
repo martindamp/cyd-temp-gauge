@@ -1,7 +1,7 @@
 # CLAUDE.md — cyd-temp-gauge
 
 Firmware for the ESP32 "Cheap Yellow Display" (ESP32-2432S028R, 2.8" ILI9341):
-a configurable MQTT dashboard (gauges, counters, text, graphs, buttons) on one
+a configurable MQTT dashboard (gauges, numbers, text, graphs, buttons) on one
 or more pages, portrait/landscape, with colour themes. PlatformIO + Arduino.
 
 ## Commands
@@ -21,7 +21,8 @@ or more pages, portrait/landscape, with colour themes. PlatformIO + Arduino.
   Same JSON format either way; parsed in `parseDashboardJson()`.
 - Runtime state (Wi-Fi, MQTT broker, chosen theme) lives in NVS (`Preferences`),
   not in the repo. No secrets are committed or in the published binary.
-- Component types: gauge, counter, text, graph, update, theme, wifi, mqtt.
+- Component types: gauge, number, text, graph, update, theme, wifi, mqtt.
+  ("counter" is a deprecated alias for "number", still parsed.)
   Grid is 3x2 (portrait) / 2x3 (landscape); placement via row/col/rowspan/colspan.
 - Overlays (page menu, theme picker, wifi scan, on-screen keyboard, mqtt form)
   are full-screen and suppress redraws while open.

@@ -25,7 +25,7 @@
           "unit": "°C"
         },
         {
-          "type": "counter",
+          "type": "number",
           "row": 1,
           "col": 0,
           "title": "Humidity",
@@ -33,7 +33,7 @@
           "unit": "%"
         },
         {
-          "type": "counter",
+          "type": "number",
           "row": 1,
           "col": 1,
           "title": "Power",
@@ -71,7 +71,7 @@
           "unit": "%"
         },
         {
-          "type": "counter",
+          "type": "number",
           "row": 1,
           "col": 0,
           "title": "Solar",
@@ -79,7 +79,7 @@
           "unit": "W"
         },
         {
-          "type": "counter",
+          "type": "number",
           "row": 1,
           "col": 1,
           "title": "Grid",

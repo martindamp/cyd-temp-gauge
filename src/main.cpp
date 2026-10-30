@@ -5,7 +5,7 @@
 
   Component types:
     - gauge   : coloured ring gauge for a numeric MQTT topic (title, topic, min, max, unit)
-    - counter : large number from a numeric MQTT topic (title, topic, unit)
+    - number  : large number from a numeric MQTT topic (title, topic, unit)
     - text    : static text, no text, or dynamic text from an MQTT topic (title, text/topic)
 
   Component layout is configured at BUILD time in dashboard.json (embedded as
@@ -141,7 +141,7 @@ int themeIndexByName(const String& n) {
 }
 
 // ---- dashboard components (build-time layout) ----
-enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH, THEME, WIFI, MQTTCFG };
+enum CompType { GAUGE, NUMBER, TEXT, UPDATE, GRAPH, THEME, WIFI, MQTTCFG };
 enum UpdState { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE };
 struct Component {
   CompType type;
@@ -363,7 +363,8 @@ static int addSeries(int compIdx, const String& topic, const String& entity,
 static void parseComponent(JsonObject c, int page) {
   Component& k = comps[nComps];
   String t = (const char*)(c["type"] | "text");
-  k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER
+  k.type       = (t == "gauge") ? GAUGE
+               : (t == "number" || t == "counter") ? NUMBER  // "counter" = deprecated alias
                : (t == "update") ? UPDATE : (t == "graph") ? GRAPH
                : (t == "theme") ? THEME : (t == "wifi") ? WIFI
                : (t == "mqtt") ? MQTTCFG : TEXT;
@@ -734,7 +735,7 @@ void drawComponent(int idx, bool clearCell) {
       int uw = u8f.getUTF8Width(c.unit.c_str());
       u8f.drawUTF8(gcx - uw / 2, gcy + rI - 3, c.unit.c_str());
     }
-  } else if (c.type == COUNTER) {
+  } else if (c.type == NUMBER) {
     String s = c.haveData ? c.value : "--";
     int uH = c.unit.length() ? 14 : 0;
     drawBigNumber(ix + iw / 2, by + (bh - uH) / 2, s, iw - 4, bh - uH - 2, numCol);
@@ -1559,7 +1560,7 @@ void handleRoot() {
          "</div><div class=res id=cfgres></div>"
          "<table><tr><td class=m>Pos</td><td class=m>Type</td><td class=m>Title</td><td class=m>Topic</td></tr>");
   for (int i = 0; i < nComps; i++) {
-    const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
+    const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == NUMBER ? "number"
                      : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph"
                      : comps[i].type == THEME ? "theme" : comps[i].type == WIFI ? "wifi"
                      : comps[i].type == MQTTCFG ? "mqtt" : "text";
@@ -1971,7 +1972,7 @@ void loop() {
 
 /*
   ---- MQTT payloads ----
-  gauge / counter : a plain number, e.g. "21.5"
+  gauge / number  : a plain number, e.g. "21.5"
   text (dynamic)  : any text, shown as received
 
   ---- If a value arrives as JSON ----
