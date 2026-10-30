@@ -181,6 +181,9 @@ Component comps[MAX_COMPONENTS];
 int       nComps = 0;
 int       nPages = 1;
 int       currentPage = 0;
+String    pageName[MAX_PAGES];   // per-page name (for the page menu)
+bool      menuOpen = false;      // page-picker overlay is showing
+int       menuTop = 0, menuRowH = 0;   // menu list geometry (set by drawMenu)
 
 // Rolling sample buffers for graph series (ring buffers). A graph may have
 // several series; each series owns one buffer slot. MAX_SERIES is the total
@@ -260,6 +263,7 @@ long   semverNum(const String& v);
 void   runOta();
 void   drawComponent(int idx, bool clearCell);
 void   drawDashboard();
+void   drawMenu();
 void   cycleTheme();
 
 // ============================ config ============================
@@ -486,12 +490,16 @@ static bool parseDashboardJson(const char* json) {
     int p = 0;
     for (JsonVariant pv : pages) {
       if (p >= MAX_PAGES) break;
+      String nm = (const char*)(pv["name"] | "");
+      if (!nm.length()) nm = (const char*)(pv["title"] | "");
+      pageName[p] = nm.length() ? nm : ("Page " + String(p + 1));
       parsePage(pv["components"].as<JsonArray>(), p);
       p++;
     }
     nPages = (p > 0) ? p : 1;
   } else {
     // Backward-compatible single-page form: {"components":[...]}
+    pageName[0] = "Page 1";
     parsePage(doc["components"].as<JsonArray>(), 0);
     nPages = 1;
   }
@@ -860,29 +868,35 @@ void drawComponent(int idx, bool clearCell) {
 }
 
 // ============================ nav bar + full dashboard ============================
-// Bottom bar: prev/next page arrows (when >1 page), page indicator, status dot, IP.
+// Bottom bar: prev/next arrows + a centre "menu" button (current page name,
+// opens the page picker), with the status dot, page counter and IP below.
 void drawNavBar() {
   int y = gridH, bh = scrH - gridH, my = y + bh / 2;
   tft.fillRect(0, y, scrW, bh, thBg);
   tft.drawFastHLine(0, y, scrW, trackColor());
-
-  if (nPages > 1) {
-    tft.fillTriangle(16, my, 30, my - 9, 30, my + 9, thDim);                    // prev
-    tft.fillTriangle(scrW - 16, my, scrW - 30, my - 9, scrW - 30, my + 9, thDim); // next
-  }
-
   uint16_t dc = (WiFi.status() == WL_CONNECTED && mqttUp) ? TFT_GREEN : TFT_RED;
+
   if (nPages > 1) {
+    tft.fillTriangle(14, my, 28, my - 9, 28, my + 9, thDim);                       // prev
+    tft.fillTriangle(scrW - 14, my, scrW - 28, my - 9, scrW - 28, my + 9, thDim);  // next
+
     int mid = scrW / 2;
-    tft.fillCircle(mid - 28, y + 11, 4, dc);
-    tft.setTextDatum(ML_DATUM);
+    // Centre menu button: hamburger icon + current page name (line 1).
+    u8f.setFont(FONT_SMALL); u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+    u8f.setForegroundColor(thText);
+    String nm = pageName[currentPage];
+    int tw = u8f.getUTF8Width(nm.c_str());
+    int icoW = 13, gap = 6, groupW = icoW + gap + tw;
+    int gx = mid - groupW / 2;
+    for (int k = 0; k < 3; k++) tft.drawFastHLine(gx, y + 5 + k * 4, icoW, thDim);
+    u8f.drawUTF8(gx + icoW + gap, y + 14, nm.c_str());
+    // Line 2: status dot + page counter + IP.
+    String info = String(currentPage + 1) + "/" + String(nPages);
+    if (WiFi.status() == WL_CONNECTED) info += "  " + WiFi.localIP().toString();
+    tft.setTextDatum(MC_DATUM);
     tft.setTextColor(thDim, thBg);
-    tft.drawString(String(currentPage + 1) + "/" + String(nPages), mid - 16, y + 11, 2);
-    if (WiFi.status() == WL_CONNECTED) {
-      tft.setTextDatum(MC_DATUM);
-      tft.setTextColor(thDim, thBg);
-      tft.drawString(WiFi.localIP().toString(), mid, y + 25, 1);
-    }
+    tft.drawString(info, mid, y + 26, 1);
+    tft.fillCircle(mid - tft.textWidth(info, 1) / 2 - 8, y + 26, 3, dc);
   } else {
     tft.fillCircle(scrW - 8, my, 4, dc);
     if (WiFi.status() == WL_CONNECTED) {
@@ -890,6 +904,31 @@ void drawNavBar() {
       tft.setTextColor(thDim, thBg);
       tft.drawString(WiFi.localIP().toString(), 6, my, 2);
     }
+  }
+}
+
+// Full-screen page picker: a tappable list of page names.
+void drawMenu() {
+  tft.fillScreen(thBg);
+  u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+  u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+  u8f.drawUTF8(14, 24, "Pages");
+  u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+  const char* hint = "tap a page";
+  u8f.drawUTF8(scrW - u8f.getUTF8Width(hint) - 14, 22, hint);
+
+  menuTop = 36;
+  int avail = scrH - menuTop - 8;
+  menuRowH = avail / nPages; if (menuRowH > 46) menuRowH = 46;
+  for (int p = 0; p < nPages; p++) {
+    int ry = menuTop + p * menuRowH;
+    bool cur = (p == currentPage);
+    tft.fillRoundRect(10, ry + 3, scrW - 20, menuRowH - 6, 6, cur ? thPanel : thBg);
+    tft.drawRoundRect(10, ry + 3, scrW - 20, menuRowH - 6, 6, cur ? thAccent : thPanel);
+    u8f.setFont(u8g2_font_helvB12_tf);
+    u8f.setForegroundColor(cur ? thAccent : thText);
+    u8f.setBackgroundColor(cur ? thPanel : thBg);
+    u8f.drawUTF8(22, ry + menuRowH / 2 + 5, pageName[p].c_str());
   }
 }
 
@@ -940,11 +979,24 @@ void handleTouch() {
   tx = constrain(tx, 0, scrW - 1);
   ty = constrain(ty, 0, scrH - 1);
 
+  // Page picker overlay: any tap closes it; a tap on a row jumps to that page.
+  if (menuOpen) {
+    lastTouchMs = now;
+    if (menuRowH > 0 && ty >= menuTop) {
+      int pp = (ty - menuTop) / menuRowH;
+      if (pp >= 0 && pp < nPages) currentPage = pp;
+    }
+    menuOpen = false;
+    drawDashboard();
+    return;
+  }
+
   if (ty >= gridH - 10) {                        // nav bar
     if (nPages <= 1) return;
     lastTouchMs = now;
-    if (tx < scrW * 0.3)      { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
-    else if (tx > scrW * 0.7) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
+    if (tx < 40)             { currentPage = (currentPage + nPages - 1) % nPages; drawDashboard(); }
+    else if (tx > scrW - 40) { currentPage = (currentPage + 1) % nPages; drawDashboard(); }
+    else                     { menuOpen = true; drawMenu(); }   // centre = menu
     return;
   }
   // component tap on the current page
@@ -1314,6 +1366,8 @@ void applyDashboard() {
   applyOrientation(g_wantLandscape);
   applyTheme(themeChosen ? themeIdx : g_defaultTheme);
   layoutDashboard();
+  menuOpen = false;
+  if (currentPage >= nPages) currentPage = 0;
   if (uiDash) drawDashboard();
 }
 
@@ -1513,7 +1567,7 @@ void loop() {
     }
   }
   bool conn = (WiFi.status() == WL_CONNECTED && mqttUp);
-  if (conn != lastConn) { lastConn = conn; drawNavBar(); }
+  if (conn != lastConn) { lastConn = conn; if (!menuOpen) drawNavBar(); }
 
   // Sample graph components at their interval (on every page, so history keeps
   // building even while another page is shown).
@@ -1537,14 +1591,16 @@ void loop() {
 
   // Redraw a component (on the current page) when it gets new data or its
   // stale state changes. Off-page components keep their state and are drawn
-  // fresh when you navigate to them.
-  for (int i = 0; i < nComps; i++) {
-    if (comps[i].page != currentPage) continue;
-    bool nowStale = comps[i].haveData && (millis() - comps[i].lastMs > STALE_MS);
-    if (comps[i].dirty || nowStale != comps[i].wasStale) {
-      comps[i].dirty = false;
-      comps[i].wasStale = nowStale;
-      drawComponent(i, true);
+  // fresh when you navigate to them. Skip while the page menu overlay is up.
+  if (!menuOpen) {
+    for (int i = 0; i < nComps; i++) {
+      if (comps[i].page != currentPage) continue;
+      bool nowStale = comps[i].haveData && (millis() - comps[i].lastMs > STALE_MS);
+      if (comps[i].dirty || nowStale != comps[i].wasStale) {
+        comps[i].dirty = false;
+        comps[i].wasStale = nowStale;
+        drawComponent(i, true);
+      }
     }
   }
 

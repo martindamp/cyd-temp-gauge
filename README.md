@@ -136,8 +136,8 @@ identical whether it's built‑in or fetched.
   "orientation": "portrait",
   "theme": "ocean",
   "pages": [
-    { "components": [ /* up to 6 components */ ] },
-    { "components": [ /* next page */ ] }
+    { "name": "Climate",   "components": [ /* up to 6 components */ ] },
+    { "name": "Utilities", "components": [ /* next page */ ] }
   ]
 }
 ```
@@ -148,10 +148,17 @@ Top‑level keys:
 |-----|--------|---------|
 | `orientation` | `"portrait"` or `"landscape"` | `portrait` |
 | `theme` | one of the [theme names](#colour-themes) | `Midnight` |
-| `pages` | array of pages, each `{ "components": [...] }`, up to 6 | — |
+| `pages` | array of pages, each `{ "name": "...", "components": [...] }`, up to 6 | — |
 
-A single‑page shorthand is also accepted: `{ "components": [ ... ] }` with no
-`pages`.
+Each page may have a `name` (shown on the menu button and in the page picker);
+it defaults to `Page N`. A single‑page shorthand is also accepted:
+`{ "components": [ ... ] }` with no `pages`.
+
+**Navigation.** With more than one page, the bottom bar shows **‹ prev**, a
+centre **menu button** (a ☰ icon plus the current page's name) and **next ›**.
+Tapping the arrows steps between pages; tapping the centre opens a full‑screen
+**page picker** listing every page by name — tap one to jump straight to it (tap
+anywhere else to dismiss).
 
 ### Layout & placement
 
