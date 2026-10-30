@@ -267,6 +267,7 @@ void   drawComponent(int idx, bool clearCell);
 void   drawDashboard();
 void   drawMenu();
 void   drawThemeMenu();
+void   selectTheme(int idx);
 
 // ============================ config ============================
 void loadConfig() {
