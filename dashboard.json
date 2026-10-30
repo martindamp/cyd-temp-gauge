@@ -85,18 +85,37 @@
           "title": "Grid",
           "topic": "home/grid/power",
           "unit": "W"
+        }
+      ]
+    },
+    {
+      "name": "Settings",
+      "components": [
+        {
+          "type": "wifi",
+          "row": 0,
+          "col": 0,
+          "colspan": 2,
+          "title": "Wi-Fi"
         },
         {
-          "type": "update",
-          "row": 2,
+          "type": "mqtt",
+          "row": 1,
           "col": 0,
-          "title": "Firmware"
+          "colspan": 2,
+          "title": "MQTT"
         },
         {
           "type": "theme",
           "row": 2,
-          "col": 1,
+          "col": 0,
           "title": "Theme"
+        },
+        {
+          "type": "update",
+          "row": 2,
+          "col": 1,
+          "title": "Firmware"
         }
       ]
     },

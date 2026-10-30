@@ -141,7 +141,7 @@ int themeIndexByName(const String& n) {
 }
 
 // ---- dashboard components (build-time layout) ----
-enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH, THEME };
+enum CompType { GAUGE, COUNTER, TEXT, UPDATE, GRAPH, THEME, WIFI, MQTTCFG };
 enum UpdState { UPD_IDLE, UPD_CHECKING, UPD_UPTODATE, UPD_AVAILABLE };
 struct Component {
   CompType type;
@@ -186,6 +186,27 @@ bool      menuOpen = false;      // page-picker overlay is showing
 int       menuTop = 0, menuRowH = 0;   // page menu list geometry (set by drawMenu)
 bool      themeMenuOpen = false; // theme-picker overlay is showing
 int       thMenuTop = 0, thMenuRowH = 0;  // theme menu list geometry
+
+// On-device settings overlays (Wi-Fi picker, on-screen keyboard, MQTT form).
+enum OvMode { OV_NONE, OV_WIFISCAN, OV_KEYBOARD, OV_MQTT };
+OvMode    inputOv = OV_NONE;
+// Wi-Fi scan results
+#define   MAX_SCAN 16
+String    scanSsid[MAX_SCAN];
+int       scanRssi[MAX_SCAN];
+bool      scanLock[MAX_SCAN];
+int       scanN = 0;
+int       wifiTop = 0, wifiRowH = 0;
+String    selectedSsid;
+// On-screen keyboard
+enum KbTarget { KT_WIFIPASS, KT_MQTT_HOST, KT_MQTT_PORT, KT_MQTT_USER, KT_MQTT_PASS };
+String    kbText, kbPrompt;
+bool      kbMask = false, kbShift = false, kbSym = false;
+KbTarget  kbTarget;
+OvMode    kbReturn = OV_NONE;
+// MQTT edit buffer
+String    eHost, ePortStr, eUser, ePass;
+int       mqttTop = 0, mqttRowH = 0;
 
 // Rolling sample buffers for graph series (ring buffers). A graph may have
 // several series; each series owns one buffer slot. MAX_SERIES is the total
@@ -268,6 +289,12 @@ void   drawDashboard();
 void   drawMenu();
 void   drawThemeMenu();
 void   selectTheme(int idx);
+void   startWifiFlow();
+void   drawWifiScan();
+void   startMqttFlow();
+void   drawMqttForm();
+void   drawKeyboard();
+void   openKeyboard(const String& prompt, const String& initial, bool mask, KbTarget target, OvMode ret);
 
 // ============================ config ============================
 void loadConfig() {
@@ -338,7 +365,8 @@ static void parseComponent(JsonObject c, int page) {
   String t = (const char*)(c["type"] | "text");
   k.type       = (t == "gauge") ? GAUGE : (t == "counter") ? COUNTER
                : (t == "update") ? UPDATE : (t == "graph") ? GRAPH
-               : (t == "theme") ? THEME : TEXT;
+               : (t == "theme") ? THEME : (t == "wifi") ? WIFI
+               : (t == "mqtt") ? MQTTCFG : TEXT;
   k.updState   = UPD_IDLE;
   k.latestVer  = "";
   k.title      = (const char*)(c["title"] | "");
@@ -864,6 +892,27 @@ void drawComponent(int idx, bool clearCell) {
     int n = 4, gap = 4, s = 12, totalW = n * s + (n - 1) * gap;
     int sx = cxb - totalW / 2, sy = bby + bhh - s - 6;
     if (sy > bby + 40) for (int k = 0; k < n; k++) tft.fillRoundRect(sx + k * (s + gap), sy, s, s, 3, sw[k]);
+  } else if (c.type == WIFI || c.type == MQTTCFG) {
+    // Settings button: title + current value, opens an on-device editor on tap.
+    int bx = ix, bby = by + 2, bw = iw, bhh = bh - 4;
+    bool wifi = (c.type == WIFI);
+    bool ok = wifi ? (WiFi.status() == WL_CONNECTED) : mqttUp;
+    tft.fillRoundRect(bx, bby, bw, bhh, 8, thBg);
+    tft.drawRoundRect(bx, bby, bw, bhh, 8, thPanel);
+    tft.drawRoundRect(bx + 1, bby + 1, bw - 2, bhh - 2, 7, thPanel);
+    int cxb = bx + bw / 2;
+    u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+    String top = c.title.length() ? c.title : String(wifi ? "Wi-Fi" : "MQTT");
+    u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+    int tw = u8f.getUTF8Width(top.c_str());
+    u8f.drawUTF8(cxb - tw / 2, bby + 14, top.c_str());
+    String val = wifi ? (cfg.ssid.length() ? cfg.ssid : String("not set"))
+                      : (cfg.mqttHost.length() ? cfg.mqttHost : String("not set"));
+    u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(ok ? thText : thDim);
+    int vw = u8f.getUTF8Width(val.c_str());
+    if (vw > bw - 12) { u8f.setFont(FONT_SMALL); vw = u8f.getUTF8Width(val.c_str()); }
+    u8f.drawUTF8(cxb - vw / 2, bby + 34, val.c_str());
+    tft.fillCircle(bx + bw - 12, bby + 12, 4, ok ? TFT_GREEN : TFT_RED);
   } else { // TEXT
     String body = c.topic.length() ? (c.haveData ? c.value : "") : c.staticText;
     drawWrappedText(ix, by, iw, bh, body, stale ? staleColor() : thText);
@@ -969,6 +1018,234 @@ void drawThemeMenu() {
   }
 }
 
+// ---- on-device settings overlays ----
+static void centerMsg(const String& s) {
+  tft.fillScreen(thBg);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(thText, thBg);
+  tft.drawString(s, scrW / 2, scrH / 2, 4);
+}
+
+// --- Wi-Fi picker ---
+void startWifiFlow() {
+  centerMsg("Scanning Wi-Fi...");
+  int n = WiFi.scanNetworks();
+  scanN = (n < 0) ? 0 : (n > MAX_SCAN ? MAX_SCAN : n);
+  for (int i = 0; i < scanN; i++) {
+    scanSsid[i] = WiFi.SSID(i);
+    scanRssi[i] = WiFi.RSSI(i);
+    scanLock[i] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+  }
+  inputOv = OV_WIFISCAN;
+  drawWifiScan();
+}
+void drawWifiScan() {
+  tft.fillScreen(thBg);
+  u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+  u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+  u8f.drawUTF8(14, 24, "Wi-Fi");
+  u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+  const char* hint = "pick a network";
+  u8f.drawUTF8(scrW - u8f.getUTF8Width(hint) - 14, 22, hint);
+  wifiTop = 36;
+  int rows = scanN + 2;                       // networks + Rescan + Cancel
+  int avail = scrH - wifiTop - 8;
+  wifiRowH = avail / (rows < 1 ? 1 : rows); if (wifiRowH > 40) wifiRowH = 40;
+  u8f.setBackgroundColor(thBg);
+  for (int i = 0; i < rows; i++) {
+    int ry = wifiTop + i * wifiRowH, h = wifiRowH - 6;
+    bool special = (i >= scanN);
+    tft.drawRoundRect(10, ry + 3, scrW - 20, h, 6, thPanel);
+    u8f.setFont(u8g2_font_helvB12_tf);
+    u8f.setForegroundColor(thText);
+    if (!special) {
+      bool cur = (scanSsid[i] == cfg.ssid);
+      u8f.setForegroundColor(cur ? thAccent : thText);
+      String nm = scanSsid[i]; if (scanLock[i]) nm += "  *";
+      u8f.drawUTF8(22, ry + 3 + h / 2 + 5, nm.c_str());
+      // signal bars (RSSI -> 1..4)
+      int q = scanRssi[i]; int bars = q >= -55 ? 4 : q >= -65 ? 3 : q >= -75 ? 2 : 1;
+      for (int b = 0; b < 4; b++) {
+        int bh = 3 + b * 3, bx = scrW - 30 + b * 6, by2 = ry + 3 + h - 6 - bh;
+        tft.fillRect(bx, by2, 4, bh, b < bars ? thAccent : thPanel);
+      }
+    } else {
+      u8f.setForegroundColor(thDim);
+      u8f.drawUTF8(22, ry + 3 + h / 2 + 5, (i == scanN) ? "Rescan" : "Cancel");
+    }
+  }
+}
+
+// --- on-screen keyboard ---
+static void kbRows(String out[4]) {
+  if (kbSym) {
+    out[0] = "1234567890"; out[1] = "@#$%&*-_+=";
+    out[2] = ":;/?!.,'~";  out[3] = "()[]{}<>|";
+  } else {
+    out[0] = "1234567890";
+    out[1] = kbShift ? "QWERTYUIOP" : "qwertyuiop";
+    out[2] = kbShift ? "ASDFGHJKL"  : "asdfghjkl";
+    out[3] = kbShift ? "ZXCVBNM"    : "zxcvbnm";
+  }
+}
+void openKeyboard(const String& prompt, const String& initial, bool mask, KbTarget target, OvMode ret) {
+  kbPrompt = prompt; kbText = initial; kbMask = mask; kbTarget = target; kbReturn = ret;
+  kbShift = false; kbSym = false;
+  inputOv = OV_KEYBOARD;
+  drawKeyboard();
+}
+void drawKeyboard() {
+  const int TB = 46;
+  tft.fillScreen(thBg);
+  // Cancel (left) + OK (right)
+  tft.fillRoundRect(4, 6, 42, 32, 6, thPanel);
+  tft.fillRoundRect(scrW - 46, 6, 42, 32, 6, thAccent);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(thText, thPanel); tft.drawString("X", 25, 22, 2);
+  tft.setTextColor(thBg, thAccent);  tft.drawString("OK", scrW - 25, 22, 2);
+  // prompt + value box
+  u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+  u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+  u8f.drawUTF8(52, 16, kbPrompt.c_str());
+  String shown = kbMask ? String("") : kbText;
+  if (kbMask) for (int i = 0; i < (int)kbText.length(); i++) shown += "*";
+  u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+  u8f.drawUTF8(52, 38, shown.c_str());
+  // key rows
+  int rowH = (scrH - TB) / 5;
+  String rows[4]; kbRows(rows);
+  for (int r = 0; r < 4; r++) {
+    int len = rows[r].length(); if (len == 0) continue;
+    int keyW = scrW / len, y = TB + r * rowH;
+    for (int i = 0; i < len; i++) {
+      int x = i * keyW;
+      tft.drawRoundRect(x + 1, y + 1, keyW - 2, rowH - 2, 4, thPanel);
+      tft.setTextDatum(MC_DATUM); tft.setTextColor(thText, thBg);
+      tft.drawString(String(rows[r][i]), x + keyW / 2, y + rowH / 2, 2);
+    }
+  }
+  // control row
+  int y = TB + 4 * rowH;
+  struct { float a, b; const char* l; } ctl[4] = {
+    { 0.00, 0.22, kbSym ? "ABC" : "Shift" }, { 0.22, 0.44, "#@~" },
+    { 0.44, 0.80, "space" }, { 0.80, 1.00, "Del" }
+  };
+  for (int i = 0; i < 4; i++) {
+    int x0 = (int)(ctl[i].a * scrW), x1 = (int)(ctl[i].b * scrW);
+    uint16_t fillc = (i == 0 && kbShift && !kbSym) ? thAccent : thPanel;
+    tft.fillRoundRect(x0 + 2, y + 1, x1 - x0 - 4, rowH - 2, 4, fillc);
+    tft.setTextDatum(MC_DATUM); tft.setTextColor(thText, fillc);
+    tft.drawString(ctl[i].l, (x0 + x1) / 2, y + rowH / 2, 2);
+  }
+}
+void kbOk();   // forward (defined after MQTT helpers)
+void kbCancel();
+
+// --- MQTT form ---
+void startMqttFlow() {
+  eHost = cfg.mqttHost; ePortStr = String(cfg.mqttPort);
+  eUser = cfg.mqttUser; ePass = cfg.mqttPass;
+  inputOv = OV_MQTT;
+  drawMqttForm();
+}
+void drawMqttForm() {
+  tft.fillScreen(thBg);
+  u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+  u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+  u8f.drawUTF8(14, 24, "MQTT broker");
+  mqttTop = 36;
+  int rows = 6;                               // Host, Port, User, Password, Save, Cancel
+  int avail = scrH - mqttTop - 8;
+  mqttRowH = avail / rows; if (mqttRowH > 40) mqttRowH = 40;
+  const char* labels[4] = { "Host", "Port", "User", "Password" };
+  String vals[4] = { eHost.length() ? eHost : "(tap to set)",
+                     ePortStr, eUser.length() ? eUser : "(none)",
+                     ePass.length() ? String("••••") : String("(none)") };
+  for (int i = 0; i < 4; i++) {
+    int ry = mqttTop + i * mqttRowH, h = mqttRowH - 6;
+    tft.drawRoundRect(10, ry + 3, scrW - 20, h, 6, thPanel);
+    u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+    u8f.drawUTF8(20, ry + 3 + h / 2 + 4, labels[i]);
+    u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+    int vw = u8f.getUTF8Width(vals[i].c_str());
+    u8f.drawUTF8(scrW - 28 - vw, ry + 3 + h / 2 + 5, vals[i].c_str());
+  }
+  // Save / Cancel
+  for (int i = 4; i < 6; i++) {
+    int ry = mqttTop + i * mqttRowH, h = mqttRowH - 6;
+    bool save = (i == 4);
+    tft.fillRoundRect(10, ry + 3, scrW - 20, h, 6, save ? thAccent : thPanel);
+    u8f.setFont(u8g2_font_helvB12_tf);
+    u8f.setForegroundColor(save ? thBg : thText);
+    u8f.setBackgroundColor(save ? thAccent : thPanel);
+    const char* l = save ? "Save" : "Cancel";
+    u8f.drawUTF8((scrW - u8f.getUTF8Width(l)) / 2, ry + 3 + h / 2 + 5, l);
+  }
+}
+void saveMqttForm() {
+  cfg.mqttHost = eHost; cfg.mqttPort = (uint16_t)ePortStr.toInt();
+  cfg.mqttUser = eUser; cfg.mqttPass = ePass;
+  prefs.begin("cfg", false);
+  prefs.putString("mhost", cfg.mqttHost);
+  prefs.putUShort("mport", cfg.mqttPort);
+  prefs.putString("muser", cfg.mqttUser);
+  prefs.putString("mpass", cfg.mqttPass);
+  prefs.end();
+  mqtt.setServer(cfg.mqttHost.c_str(), cfg.mqttPort);
+  mqtt.disconnect();   // reconnect in loop with the new settings
+}
+
+void kbCancel() {
+  inputOv = kbReturn;
+  if (inputOv == OV_WIFISCAN)   drawWifiScan();
+  else if (inputOv == OV_MQTT)  drawMqttForm();
+  else { inputOv = OV_NONE; drawDashboard(); }
+}
+void kbOk() {
+  switch (kbTarget) {
+    case KT_WIFIPASS:
+      saveWiFi(selectedSsid.c_str(), kbText.c_str());
+      cfg.ssid = selectedSsid; cfg.pass = kbText;
+      inputOv = OV_NONE;
+      centerMsg("Connecting...");
+      WiFi.disconnect(); WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str());
+      { uint32_t t0 = millis(); while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000) delay(100); }
+      drawDashboard();
+      return;
+    case KT_MQTT_HOST: eHost = kbText; break;
+    case KT_MQTT_PORT: ePortStr = kbText; break;
+    case KT_MQTT_USER: eUser = kbText; break;
+    case KT_MQTT_PASS: ePass = kbText; break;
+  }
+  inputOv = OV_MQTT;
+  drawMqttForm();
+}
+
+void kbHandleTap(int tx, int ty) {
+  const int TB = 46;
+  if (ty < TB) {
+    if (tx < 50)          { kbCancel(); return; }
+    if (tx > scrW - 50)   { kbOk();     return; }
+    return;
+  }
+  int rowH = (scrH - TB) / 5;
+  int row = (ty - TB) / rowH;
+  if (row >= 4) {                             // control row
+    float f = (float)tx / scrW;
+    if (f < 0.22)      { if (kbSym) kbSym = false; else kbShift = !kbShift; }
+    else if (f < 0.44) { kbSym = !kbSym; kbShift = false; }
+    else if (f < 0.80) { kbText += ' '; }
+    else               { if (kbText.length()) kbText.remove(kbText.length() - 1); }
+    drawKeyboard(); return;
+  }
+  String rows[4]; kbRows(rows);
+  String r = rows[row]; int len = r.length(); if (len == 0) return;
+  int keyW = scrW / len, idx = tx / keyW;
+  if (idx < 0 || idx >= len) return;
+  kbText += r[idx];
+  drawKeyboard();
+}
+
 void drawDashboard() {
   tft.fillScreen(thBg);
   for (int i = 0; i < nComps; i++) {
@@ -1038,6 +1315,38 @@ void handleTouch() {
     drawDashboard();
     return;
   }
+  // On-device settings overlays.
+  if (inputOv == OV_KEYBOARD) { lastTouchMs = now; kbHandleTap(tx, ty); return; }
+  if (inputOv == OV_WIFISCAN) {
+    lastTouchMs = now;
+    int rows = scanN + 2;
+    if (wifiRowH > 0 && ty >= wifiTop) {
+      int r = (ty - wifiTop) / wifiRowH;
+      if (r >= 0 && r < scanN) {
+        selectedSsid = scanSsid[r];
+        openKeyboard("Password: " + selectedSsid, "", true, KT_WIFIPASS, OV_WIFISCAN);
+        return;
+      } else if (r == scanN) { startWifiFlow(); return; }      // Rescan
+    }
+    inputOv = OV_NONE; drawDashboard();                        // Cancel / off-list
+    return;
+  }
+  if (inputOv == OV_MQTT) {
+    lastTouchMs = now;
+    if (mqttRowH > 0 && ty >= mqttTop) {
+      int r = (ty - mqttTop) / mqttRowH;
+      switch (r) {
+        case 0: openKeyboard("MQTT host", eHost, false, KT_MQTT_HOST, OV_MQTT); return;
+        case 1: openKeyboard("MQTT port", ePortStr, false, KT_MQTT_PORT, OV_MQTT); return;
+        case 2: openKeyboard("MQTT user", eUser, false, KT_MQTT_USER, OV_MQTT); return;
+        case 3: openKeyboard("MQTT password", ePass, true, KT_MQTT_PASS, OV_MQTT); return;
+        case 4: saveMqttForm(); inputOv = OV_NONE; drawDashboard(); return;   // Save
+        case 5: inputOv = OV_NONE; drawDashboard(); return;                   // Cancel
+      }
+    }
+    inputOv = OV_NONE; drawDashboard();
+    return;
+  }
 
   if (ty >= gridH - 10) {                        // nav bar
     if (nPages <= 1) return;
@@ -1053,8 +1362,10 @@ void handleTouch() {
     bool hit = tx >= comps[i].rx && tx < comps[i].rx + comps[i].rw &&
                ty >= comps[i].ry && ty < comps[i].ry + comps[i].rh;
     if (!hit) continue;
-    if (comps[i].type == UPDATE) { lastTouchMs = now; handleUpdateTap(i); return; }
-    if (comps[i].type == THEME)  { lastTouchMs = now; themeMenuOpen = true; drawThemeMenu(); return; }
+    if (comps[i].type == UPDATE)  { lastTouchMs = now; handleUpdateTap(i); return; }
+    if (comps[i].type == THEME)   { lastTouchMs = now; themeMenuOpen = true; drawThemeMenu(); return; }
+    if (comps[i].type == WIFI)    { lastTouchMs = now; startWifiFlow(); return; }
+    if (comps[i].type == MQTTCFG) { lastTouchMs = now; startMqttFlow(); return; }
   }
 }
 
@@ -1250,7 +1561,8 @@ void handleRoot() {
   for (int i = 0; i < nComps; i++) {
     const char* tn = comps[i].type == GAUGE ? "gauge" : comps[i].type == COUNTER ? "counter"
                      : comps[i].type == UPDATE ? "update" : comps[i].type == GRAPH ? "graph"
-                     : comps[i].type == THEME ? "theme" : "text";
+                     : comps[i].type == THEME ? "theme" : comps[i].type == WIFI ? "wifi"
+                     : comps[i].type == MQTTCFG ? "mqtt" : "text";
     String ttl = comps[i].title.length() ? comps[i].title : String("(no title)");
     String tpc;
     if (comps[i].type == GRAPH) {
@@ -1416,6 +1728,7 @@ void applyDashboard() {
   layoutDashboard();
   menuOpen = false;
   themeMenuOpen = false;
+  inputOv = OV_NONE;
   if (currentPage >= nPages) currentPage = 0;
   if (uiDash) drawDashboard();
 }
@@ -1614,7 +1927,7 @@ void loop() {
       mqtt.loop();
     }
   }
-  bool overlay = menuOpen || themeMenuOpen;
+  bool overlay = menuOpen || themeMenuOpen || (inputOv != OV_NONE);
   bool conn = (WiFi.status() == WL_CONNECTED && mqttUp);
   if (conn != lastConn) { lastConn = conn; if (!overlay) drawNavBar(); }
 

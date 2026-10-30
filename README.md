@@ -265,6 +265,31 @@ device and persists across reboots. Needs only a `title`.
 { "type": "theme", "title": "Theme" }
 ```
 
+#### `wifi`
+A button for on‑device Wi‑Fi setup, complementing the web page. Tap it to scan
+for networks, pick one from the list, and type the password on a full‑screen
+on‑screen keyboard; the device saves it and reconnects. Shows the current SSID
+and a connection dot. Needs only a `title`.
+
+```json
+{ "type": "wifi", "title": "Wi-Fi" }
+```
+
+#### `mqtt`
+A button for on‑device MQTT setup. Tap it to edit **host**, **port**, **user**
+and **password** (each via the on‑screen keyboard), then **Save** to store and
+reconnect. Shows the current broker host and a connection dot. Needs only a
+`title`.
+
+```json
+{ "type": "mqtt", "title": "MQTT" }
+```
+
+> The on‑screen keyboard has upper/lower/symbol layers (⇧ and `#@~`), space and
+> delete. On a resistive panel the keys are small, so good touch calibration
+> helps; if taps feel off, tune `TOUCH_MINX/MAXX/MINY/MAXY` in `src/main.cpp`.
+> These buttons are a complement to the device web page, which can do the same.
+
 ### Graphs in depth
 
 **History model.** A graph keeps its own rolling ring buffer (120 points per
