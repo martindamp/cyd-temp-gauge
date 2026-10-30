@@ -257,8 +257,9 @@ install it (the device shows a progress bar and reboots). Needs only a `title`.
 
 #### `theme`
 A touchable button showing the current colour theme with colour swatches. Tap to
-cycle through the [themes](#colour-themes); the choice is saved on the device and
-persists across reboots. Needs only a `title`.
+open a full‑screen **theme picker** that previews every [theme](#colour-themes)
+(each row in its own colours); tap one to apply it. The choice is saved on the
+device and persists across reboots. Needs only a `title`.
 
 ```json
 { "type": "theme", "title": "Theme" }
@@ -326,9 +327,9 @@ Eight themes are built in:
 
 Each defines the background, text, dim text, panel borders, an accent colour and
 the three gauge bands. Set the default with the top‑level `"theme"` key (name is
-case‑insensitive). Add a [`theme` component](#theme) for an on‑screen switcher;
-the chosen theme is saved in NVS and overrides the config default until you pick
-another.
+case‑insensitive). Add a [`theme` component](#theme) for an on‑screen button that
+opens a picker previewing all themes; the chosen theme is saved in NVS and
+overrides the config default until you pick another.
 
 ## What to publish on MQTT
 

@@ -183,7 +183,9 @@ int       nPages = 1;
 int       currentPage = 0;
 String    pageName[MAX_PAGES];   // per-page name (for the page menu)
 bool      menuOpen = false;      // page-picker overlay is showing
-int       menuTop = 0, menuRowH = 0;   // menu list geometry (set by drawMenu)
+int       menuTop = 0, menuRowH = 0;   // page menu list geometry (set by drawMenu)
+bool      themeMenuOpen = false; // theme-picker overlay is showing
+int       thMenuTop = 0, thMenuRowH = 0;  // theme menu list geometry
 
 // Rolling sample buffers for graph series (ring buffers). A graph may have
 // several series; each series owns one buffer slot. MAX_SERIES is the total
@@ -264,7 +266,7 @@ void   runOta();
 void   drawComponent(int idx, bool clearCell);
 void   drawDashboard();
 void   drawMenu();
-void   cycleTheme();
+void   drawThemeMenu();
 
 // ============================ config ============================
 void loadConfig() {
@@ -932,6 +934,40 @@ void drawMenu() {
   }
 }
 
+// Full-screen theme picker: each row previews a theme (its own bg/text) with a
+// strip of its colour swatches; tap one to apply it.
+void drawThemeMenu() {
+  tft.fillScreen(thBg);
+  u8f.setFontMode(1); u8f.setBackgroundColor(thBg);
+  u8f.setFont(u8g2_font_helvB12_tf); u8f.setForegroundColor(thText);
+  u8f.drawUTF8(14, 24, "Theme");
+  u8f.setFont(FONT_SMALL); u8f.setForegroundColor(thDim);
+  const char* hint = "tap a theme";
+  u8f.drawUTF8(scrW - u8f.getUTF8Width(hint) - 14, 22, hint);
+
+  thMenuTop = 36;
+  int avail = scrH - thMenuTop - 8;
+  thMenuRowH = avail / NTHEMES; if (thMenuRowH > 40) thMenuRowH = 40;
+  for (int p = 0; p < NTHEMES; p++) {
+    const Theme& t = THEMES[p];
+    uint16_t bg = rgb565(t.bg), tx = rgb565(t.text), ac = rgb565(t.accent);
+    bool cur = (p == themeIdx);
+    int ry = thMenuTop + p * thMenuRowH;
+    int h = thMenuRowH - 6;
+    tft.fillRoundRect(10, ry + 3, scrW - 20, h, 6, bg);                 // preview in the theme's own bg
+    tft.drawRoundRect(10, ry + 3, scrW - 20, h, 6, cur ? ac : thPanel);
+    if (cur) tft.drawRoundRect(11, ry + 4, scrW - 22, h - 2, 6, ac);
+    u8f.setFont(u8g2_font_helvB12_tf);
+    u8f.setForegroundColor(tx); u8f.setBackgroundColor(bg);
+    u8f.drawUTF8(22, ry + 3 + h / 2 + 5, t.name);
+    // swatches: low / mid / high / accent
+    uint16_t sw[4] = { rgb565(t.low), rgb565(t.mid), rgb565(t.high), ac };
+    int s = min(12, h - 8), gap = 4, n = 4;
+    int sx = scrW - 20 - (n * s + (n - 1) * gap), sy = ry + 3 + (h - s) / 2;
+    for (int k = 0; k < n; k++) tft.fillRoundRect(sx + k * (s + gap), sy, s, s, 2, sw[k]);
+  }
+}
+
 void drawDashboard() {
   tft.fillScreen(thBg);
   for (int i = 0; i < nComps; i++) {
@@ -990,6 +1026,17 @@ void handleTouch() {
     drawDashboard();
     return;
   }
+  // Theme picker overlay: any tap closes it; a tap on a row applies that theme.
+  if (themeMenuOpen) {
+    lastTouchMs = now;
+    if (thMenuRowH > 0 && ty >= thMenuTop) {
+      int tp = (ty - thMenuTop) / thMenuRowH;
+      if (tp >= 0 && tp < NTHEMES) selectTheme(tp);
+    }
+    themeMenuOpen = false;
+    drawDashboard();
+    return;
+  }
 
   if (ty >= gridH - 10) {                        // nav bar
     if (nPages <= 1) return;
@@ -1006,7 +1053,7 @@ void handleTouch() {
                ty >= comps[i].ry && ty < comps[i].ry + comps[i].rh;
     if (!hit) continue;
     if (comps[i].type == UPDATE) { lastTouchMs = now; handleUpdateTap(i); return; }
-    if (comps[i].type == THEME)  { lastTouchMs = now; cycleTheme();       return; }
+    if (comps[i].type == THEME)  { lastTouchMs = now; themeMenuOpen = true; drawThemeMenu(); return; }
   }
 }
 
@@ -1367,21 +1414,21 @@ void applyDashboard() {
   applyTheme(themeChosen ? themeIdx : g_defaultTheme);
   layoutDashboard();
   menuOpen = false;
+  themeMenuOpen = false;
   if (currentPage >= nPages) currentPage = 0;
   if (uiDash) drawDashboard();
 }
 
-// Persist the active theme and advance to the next one (theme-switch button).
+// Persist the active theme (theme-switch button / picker).
 void saveTheme() {
   prefs.begin("cfg", false);
   prefs.putInt("theme", themeIdx);
   prefs.end();
 }
-void cycleTheme() {
-  applyTheme((themeIdx + 1) % NTHEMES);
+void selectTheme(int idx) {
+  applyTheme(idx);
   themeChosen = true;
   saveTheme();
-  drawDashboard();
 }
 
 // Fetch cfg.cfgUrl once after WiFi comes up, cache it, and apply it.
@@ -1566,8 +1613,9 @@ void loop() {
       mqtt.loop();
     }
   }
+  bool overlay = menuOpen || themeMenuOpen;
   bool conn = (WiFi.status() == WL_CONNECTED && mqttUp);
-  if (conn != lastConn) { lastConn = conn; if (!menuOpen) drawNavBar(); }
+  if (conn != lastConn) { lastConn = conn; if (!overlay) drawNavBar(); }
 
   // Sample graph components at their interval (on every page, so history keeps
   // building even while another page is shown).
@@ -1591,8 +1639,8 @@ void loop() {
 
   // Redraw a component (on the current page) when it gets new data or its
   // stale state changes. Off-page components keep their state and are drawn
-  // fresh when you navigate to them. Skip while the page menu overlay is up.
-  if (!menuOpen) {
+  // fresh when you navigate to them. Skip while an overlay is up.
+  if (!overlay) {
     for (int i = 0; i < nComps; i++) {
       if (comps[i].page != currentPage) continue;
       bool nowStale = comps[i].haveData && (millis() - comps[i].lastMs > STALE_MS);
